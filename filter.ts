@@ -17,11 +17,15 @@ function listen() {
     clientStream.on("message", async (data: WebSocket.Data) => {
       const message = data.toString();
 
+      const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+      if (message.indexOf("EVENT") > -1) {
+        console.log(`${ip}: ${message}`);
+      }
+
       let shouldRelay = true;
       for (const filter of filters) {
         if (filter.test(message)) {
           // 正規表現パターンにマッチする場合はコンソールにログ出力
-          const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
           console.log(`${ip}: ${message}`);
           shouldRelay = false;
           break;
