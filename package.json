@@ -9,6 +9,12 @@
   "author": "Kirino Minato <kirino.minato@gmail.com>",
   "license": "ISC",
   "dependencies": {
-    "typescript": "^5.0.2"
+    "@types/ws": "^8.5.4",
+    "typescript": "^5.0.2",
+    "ws": "^8.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^18.15.3",
+    "ts-node": "^10.9.1"
   }
 }
