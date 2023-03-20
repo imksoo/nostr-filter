@@ -17,28 +17,37 @@ function listen() {
     clientStream.on("message", async (data: WebSocket.Data) => {
       const message = data.toString();
       const event = JSON.parse(message);
-      const kind = event[1].kind;
-      const content = event[1].content;
 
       const ip =
         req.headers["x-real-ip"] ||
         req.headers["x-forwarded-for"] ||
         req.socket.remoteAddress;
-      if (message.indexOf("EVENT") > -1) {
-        console.log(`❔ ${ip} : kind=${kind} ${JSON.stringify(content)}`);
-      }
 
-      let shouldRelay = true;
-      for (const filter of contentFilters) {
-        if (filter.test(content)) {
-          // 正規表現パターンにマッチする場合はコンソールにログ出力
-          console.log(`🚫 ${ip} : kind=${kind} ${JSON.stringify(content)}`);
-          shouldRelay = false;
-          break;
+      if (event[0] === "EVENT") {
+        const kind = event[1].kind;
+        const content = event[1].content;
+        const pubkey = event[1].pubkey;
+
+        let status = "❔";
+        let shouldRelay = true;
+        for (const filter of contentFilters) {
+          if (filter.test(content)) {
+            // 正規表現パターンにマッチする場合はコンソールにログ出力
+            status = "🚫";
+            shouldRelay = false;
+            break;
+          }
         }
-      }
-      if (shouldRelay) {
-        // 正規表現パターンにマッチしない場合は上流のWebSocketに送信
+        console.log(
+          `${status} ${ip} : kind=${kind} ${pubkey} ${JSON.stringify(content)}`
+        );
+        if (shouldRelay) {
+          // 正規表現パターンにマッチしない場合は上流のWebSocketに送信
+          if (upstreamSocket.readyState === WebSocket.OPEN) {
+            upstreamSocket.send(message);
+          }
+        }
+      } else {
         if (upstreamSocket.readyState === WebSocket.OPEN) {
           upstreamSocket.send(message);
         }
