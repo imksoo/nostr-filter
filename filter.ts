@@ -1,17 +1,45 @@
-import { IncomingMessage } from "http";
+import http from "http";
 import WebSocket from "ws";
 
-const listenUrl = "ws://localhost:8081"; // クライアントからのWebSocket接続先のURL
-const upstreamUrl = "ws://localhost:8080"; // 上流のWebSocketサーバのURL
+const listenPort = 8081; // クライアントからのWebSocket待ち受けポート
+const upstreamHttpUrl = "http://localhost:8080"; // 上流のWebSocketサーバのURL
+const upstreamWsUrl = "ws://localhost:8080"; // 上流のWebSocketサーバのURL
 
 const contentFilters = [/avive/i, /web3/, /lnbc/, /t\.me/]; // 正規表現パターンの配列
 
 function listen() {
-  const wss = new WebSocket.Server({ port: 8081 });
-  wss.on("connection", (clientStream: WebSocket, req: IncomingMessage) => {
-    // console.log("WebSocket connected");
+  console.log(`WebSocket server listening on ${listenPort}`);
 
-    let upstreamSocket = new WebSocket(upstreamUrl);
+  const server = http.createServer(
+    async (req: http.IncomingMessage, res: http.ServerResponse) => {
+      if (req.url === "/") {
+        // レスポンスヘッダーにCORSを許可するヘッダーを追加する
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end("Please use a Nostr client to connect...\n");
+      } else {
+        // Upgrade以外のリクエストを上流に転送する
+        const proxyReq = http.request(
+          upstreamHttpUrl,
+          {
+            method: req.method,
+            headers: req.headers,
+            path: req.url,
+            agent: false,
+          },
+          (proxyRes) => {
+            res.setHeader("Access-Control-Allow-Origin", "*");
+            res.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers);
+            proxyRes.pipe(res);
+          }
+        );
+        req.pipe(proxyReq);
+      }
+    }
+  );
+  const wss = new WebSocket.Server({ server });
+  wss.on("connection", (clientStream: WebSocket, req: http.IncomingMessage) => {
+    let upstreamSocket = new WebSocket(upstreamWsUrl);
     connectUpstream(upstreamSocket, clientStream);
 
     clientStream.on("message", async (data: WebSocket.Data) => {
@@ -59,14 +87,14 @@ function listen() {
     });
 
     clientStream.on("error", (error: Error) => {
-      console.log("WebSocket error:", error);
+      // console.log("WebSocket error:", error);
     });
 
     clientStream.pong = () => {
       clientStream.ping();
     };
   });
-  console.log(`WebSocket server listening on ${listenUrl}`);
+  server.listen(listenPort);
 }
 
 function connectUpstream(upstreamSocket: WebSocket, clientStream: WebSocket) {
@@ -95,7 +123,7 @@ function reconnect(upstreamSocket: WebSocket, clientStream: WebSocket) {
     if (upstreamSocket.readyState === WebSocket.CLOSED) {
       console.log("Trying to reconnect to upstream WebSocket...");
       upstreamSocket.removeAllListeners(); // イベントリスナーをクリア
-      upstreamSocket = new WebSocket(upstreamUrl);
+      upstreamSocket = new WebSocket(upstreamWsUrl);
       connectUpstream(upstreamSocket, clientStream);
     } else {
       console.log("Upstream WebSocket is already connected or connecting");
