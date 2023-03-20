@@ -17,13 +17,13 @@ cd nostr-filter/
 2. Build the Docker image.
 
 ```
-docker-compose build.
+docker compose build
 ```
 
 3. Start the Docker container.
 
 ```
-docker-compose up -d
+docker compose up -d
 ```
 
 ## Configuration
