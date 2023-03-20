@@ -1,0 +1,9 @@
+version: '3'
+
+services:
+  filter:
+    build: .
+    ports:
+      - "8081:8081"
+    restart: always
+    network_mode: host
