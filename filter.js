@@ -15,7 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const ws_1 = __importDefault(require("ws"));
 const listenUrl = "ws://localhost:8081"; // クライアントからのWebSocket接続先のURL
 const upstreamUrl = "ws://localhost:8080"; // 上流のWebSocketサーバのURL
-const filters = [/^avive/i, /web3$/i]; // 正規表現パターンの配列
+const contentFilters = [/avive/i, /web3/, /lnbc/, /t\.me/]; // 正規表現パターンの配列
 function listen() {
     const wss = new ws_1.default.Server({ port: 8081 });
     wss.on("connection", (clientStream, req) => {
@@ -24,15 +24,20 @@ function listen() {
         connectUpstream(upstreamSocket, clientStream);
         clientStream.on("message", (data) => __awaiter(this, void 0, void 0, function* () {
             const message = data.toString();
-            const ip = req.headers["x-real-ip"] || req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+            const event = JSON.parse(message);
+            const kind = event[1].kind;
+            const content = event[1].content;
+            const ip = req.headers["x-real-ip"] ||
+                req.headers["x-forwarded-for"] ||
+                req.socket.remoteAddress;
             if (message.indexOf("EVENT") > -1) {
-                console.log(`${ip}: ${message}`);
+                console.log(`❔ ${ip} : kind=${kind} ${JSON.stringify(content)}`);
             }
             let shouldRelay = true;
-            for (const filter of filters) {
-                if (filter.test(message)) {
+            for (const filter of contentFilters) {
+                if (filter.test(content)) {
                     // 正規表現パターンにマッチする場合はコンソールにログ出力
-                    console.log(`${ip}: ${message}`);
+                    console.log(`🚫 ${ip} : kind=${kind} ${JSON.stringify(content)}`);
                     shouldRelay = false;
                     break;
                 }
