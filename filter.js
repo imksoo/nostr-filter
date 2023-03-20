@@ -15,20 +15,23 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const ws_1 = __importDefault(require("ws"));
 const listenUrl = "ws://localhost:8081"; // クライアントからのWebSocket接続先のURL
 const upstreamUrl = "ws://localhost:8080"; // 上流のWebSocketサーバのURL
-const filters = [/^avive/i, /World$/i]; // 正規表現パターンの配列
+const filters = [/^avive/i, /web3$/i]; // 正規表現パターンの配列
 function listen() {
     const wss = new ws_1.default.Server({ port: 8081 });
     wss.on("connection", (clientStream, req) => {
-        console.log("WebSocket connected");
+        // console.log("WebSocket connected");
         let upstreamSocket = new ws_1.default(upstreamUrl);
         connectUpstream(upstreamSocket, clientStream);
         clientStream.on("message", (data) => __awaiter(this, void 0, void 0, function* () {
             const message = data.toString();
+            const ip = req.headers["x-real-ip"] || req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+            if (message.indexOf("EVENT") > -1) {
+                console.log(`${ip}: ${message}`);
+            }
             let shouldRelay = true;
             for (const filter of filters) {
                 if (filter.test(message)) {
                     // 正規表現パターンにマッチする場合はコンソールにログ出力
-                    const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
                     console.log(`${ip}: ${message}`);
                     shouldRelay = false;
                     break;
@@ -42,7 +45,7 @@ function listen() {
             }
         }));
         clientStream.on("close", () => {
-            console.log("WebSocket disconnected");
+            // console.log("WebSocket disconnected");
         });
         clientStream.on("error", (error) => {
             console.log("WebSocket error:", error);
@@ -55,10 +58,10 @@ function listen() {
 }
 function connectUpstream(upstreamSocket, clientStream) {
     upstreamSocket.on("open", () => {
-        console.log("Upstream WebSocket connected");
+        // console.log("Upstream WebSocket connected");
     });
     upstreamSocket.on("close", () => {
-        console.log("Upstream WebSocket disconnected");
+        // console.log("Upstream WebSocket disconnected");
         reconnect(upstreamSocket, clientStream);
     });
     upstreamSocket.on("error", (error) => {

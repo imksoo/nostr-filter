@@ -4,12 +4,12 @@ import WebSocket from "ws";
 const listenUrl = "ws://localhost:8081"; // クライアントからのWebSocket接続先のURL
 const upstreamUrl = "ws://localhost:8080"; // 上流のWebSocketサーバのURL
 
-const filters = [/^avive/i, /World$/i]; // 正規表現パターンの配列
+const filters = [/^avive/i, /web3$/i]; // 正規表現パターンの配列
 
 function listen() {
   const wss = new WebSocket.Server({ port: 8081 });
   wss.on("connection", (clientStream: WebSocket, req: IncomingMessage) => {
-    console.log("WebSocket connected");
+    // console.log("WebSocket connected");
 
     let upstreamSocket = new WebSocket(upstreamUrl);
     connectUpstream(upstreamSocket, clientStream);
@@ -17,7 +17,7 @@ function listen() {
     clientStream.on("message", async (data: WebSocket.Data) => {
       const message = data.toString();
 
-      const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+      const ip = req.headers["x-real-ip"] || req.headers["x-forwarded-for"] || req.socket.remoteAddress;
       if (message.indexOf("EVENT") > -1) {
         console.log(`${ip}: ${message}`);
       }
@@ -40,7 +40,7 @@ function listen() {
     });
 
     clientStream.on("close", () => {
-      console.log("WebSocket disconnected");
+      // console.log("WebSocket disconnected");
     });
 
     clientStream.on("error", (error: Error) => {
@@ -56,11 +56,11 @@ function listen() {
 
 function connectUpstream(upstreamSocket: WebSocket, clientStream: WebSocket) {
   upstreamSocket.on("open", () => {
-    console.log("Upstream WebSocket connected");
+    // console.log("Upstream WebSocket connected");
   });
 
   upstreamSocket.on("close", () => {
-    console.log("Upstream WebSocket disconnected");
+    // console.log("Upstream WebSocket disconnected");
     reconnect(upstreamSocket, clientStream);
   });
 
