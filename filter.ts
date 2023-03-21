@@ -1,5 +1,7 @@
 import http from "http";
 import WebSocket from "ws";
+import fs from "fs";
+import path from "path";
 
 const listenPort = 8081; // クライアントからのWebSocket待ち受けポート
 const upstreamHttpUrl = "http://localhost:8080"; // 上流のWebSocketサーバのURL
@@ -15,8 +17,14 @@ function listen() {
       if (req.url === "/") {
         // レスポンスヘッダーにCORSを許可するヘッダーを追加する
         res.setHeader("Access-Control-Allow-Origin", "*");
-        res.writeHead(200, { "Content-Type": "text/plain" });
-        res.end("Please use a Nostr client to connect...\n");
+        res.writeHead(200, { "Content-Type": "text/html" });
+        fs.readFile(path.join(__dirname, "index.html"), (err, data) => {
+          if (err) {
+            res.end("Please use a Nostr client to connect...\n");
+          } else {
+            res.end(data);
+          }
+        });
       } else {
         // Upgrade以外のリクエストを上流に転送する
         const proxyReq = http.request(
