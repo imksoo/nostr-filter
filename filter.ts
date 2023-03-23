@@ -14,9 +14,8 @@ function listen() {
 
   const server = http.createServer(
     async (req: http.IncomingMessage, res: http.ServerResponse) => {
-      if (req.url === "/") {
+      if (req.url === "/" && req.headers.accept !== "application/nostr+json") {
         // レスポンスヘッダーにCORSを許可するヘッダーを追加する
-        res.setHeader("Access-Control-Allow-Origin", "*");
         res.writeHead(200, { "Content-Type": "text/html" });
         fs.readFile(path.join(__dirname, "index.html"), (err, data) => {
           if (err) {
@@ -26,7 +25,7 @@ function listen() {
           }
         });
       } else {
-        // Upgrade以外のリクエストを上流に転送する
+        // Upgrade以外のリクエストとNIP-11を上流に転送する
         const proxyReq = http.request(
           upstreamHttpUrl,
           {
@@ -36,7 +35,6 @@ function listen() {
             agent: false,
           },
           (proxyRes) => {
-            res.setHeader("Access-Control-Allow-Origin", "*");
             res.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers);
             proxyRes.pipe(res);
           }
