@@ -59,30 +59,26 @@ function listen() {
         req.headers["x-forwarded-for"] ||
         req.socket.remoteAddress;
 
-      if (event[0] === "EVENT") {
-        const kind = event[1].kind;
-        const content = event[1].content;
-        const pubkey = event[1].pubkey;
-
-        let status = "❔";
+      if (event[0] === "EVENT" && event[1].kind === 1) {
         let shouldRelay = true;
         for (const filter of contentFilters) {
-          if (filter.test(content)) {
+          if (filter.test(event[1].content)) {
             // 正規表現パターンにマッチする場合はコンソールにログ出力
-            status = "🚫";
             shouldRelay = false;
             break;
           }
         }
-        console.log(
-          `${status} ${ip} : kind=${kind} ${pubkey} ${JSON.stringify(content)}`
-        );
         if (shouldRelay) {
           // 正規表現パターンにマッチしない場合は上流のWebSocketに送信
           if (upstreamSocket.readyState === WebSocket.OPEN) {
             upstreamSocket.send(message);
           }
         }
+        console.log(
+          `${shouldRelay ? "❔" : "🚫"} ${ip} : kind=${event[1].kind} pubkey=${
+            event[1].pubkey
+          } content=${JSON.stringify(event[1].content)}`
+        );
       } else {
         if (upstreamSocket.readyState === WebSocket.OPEN) {
           upstreamSocket.send(message);
