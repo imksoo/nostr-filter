@@ -46,14 +46,14 @@ function listen() {
   );
   // WebSocketサーバーの構成
   const wss = new WebSocket.Server({ server });
-  wss.on("connection", (clientStream: WebSocket, req: http.IncomingMessage) => {
+  wss.on("connection", (clientSocket: WebSocket, req: http.IncomingMessage) => {
     console.log("Client WebSocket connected");
 
     let upstreamSocket = new WebSocket(upstreamWsUrl);
-    connectUpstream(upstreamSocket, clientStream);
+    connectUpstream(upstreamSocket, clientSocket);
 
     // クライアントからメッセージを受信したとき
-    clientStream.on("message", async (data: WebSocket.Data) => {
+    clientSocket.on("message", async (data: WebSocket.Data) => {
       const message = data.toString();
       const event = JSON.parse(message);
 
@@ -89,33 +89,29 @@ function listen() {
       }
 
       function sendMessageToUpstream(message: String) {
-        switch (upstreamSocket.readyState) {
-          default:
-            reconnectUpstream(upstreamSocket, clientStream);
-          case WebSocket.OPEN:
-          case WebSocket.CONNECTING:
-            waitForSocketReadyState(upstreamSocket, () => {
-              upstreamSocket.send(message);
-            });
-            break;
+        if (upstreamSocket.readyState === WebSocket.OPEN) {
+          upstreamSocket.send(message);
+        } else {
+          clientSocket.close();
         }
       }
     });
 
-    clientStream.on("close", () => {
-      console.log("Client WebSocket disconnected");
-      closeUpstream(upstreamSocket);
-      console.log("Upstream WebSocket disconnected");
+    clientSocket.on("close", () => {
+      console.log("Client WebSocket disconnected by close event");
+      upstreamSocket.close();
+      console.log(" -> Upstream WebSocket disconnected");
     });
 
-    clientStream.on("error", (error: Error) => {
+    clientSocket.on("error", (error: Error) => {
       console.log("Client WebSocket error:", error);
-      closeUpstream(upstreamSocket);
-      console.log("Upstream WebSocket disconnected");
+      upstreamSocket.close();
+      clientSocket.close();
+      console.log(" -> Upstream WebSocket disconnected");
     });
 
-    clientStream.pong = () => {
-      clientStream.ping();
+    clientSocket.pong = () => {
+      clientSocket.ping();
     };
   });
   // HTTP+WebSocketサーバーの起動
@@ -123,72 +119,28 @@ function listen() {
 }
 
 // 上流のリレーサーバーとの接続
-function connectUpstream(
-  upstreamSocket: WebSocket,
-  clientStream: WebSocket,
-  retryCount = 0
-) {
+function connectUpstream(upstreamSocket: WebSocket, clientStream: WebSocket) {
   upstreamSocket.on("open", () => {
     console.log("Upstream WebSocket connected");
   });
 
   upstreamSocket.on("close", () => {
     console.log("Upstream WebSocket disconnected by close event");
-    reconnectUpstream(upstreamSocket, clientStream, retryCount);
+    clientStream.close();
+    console.log(" -> Client WebSocket disconnected");
   });
 
   upstreamSocket.on("error", (error: Error) => {
     console.log("Upstream WebSocket error:", error);
-    reconnectUpstream(upstreamSocket, clientStream, retryCount);
+    clientStream.close();
+    upstreamSocket.close();
+    console.log(" -> Client WebSocket disconnected");
   });
 
   upstreamSocket.on("message", async (data: WebSocket.Data) => {
     const message = data.toString();
     clientStream.send(message);
   });
-}
-
-// 上流のリレーサーバーとの接続を切断する
-function closeUpstream(upstreamSocket: WebSocket): void {
-  upstreamSocket.removeAllListeners(); // イベントリスナーをクリア
-  upstreamSocket.close();
-}
-
-// 上流のリレーサーバーとの再接続処理
-function reconnectUpstream(
-  upstreamSocket: WebSocket,
-  clientStream: WebSocket,
-  retryCount = 0
-): void {
-  // 再接続の間隔を0.3秒～60秒の間で指数関数的に増やす
-  const timeout = Math.min(Math.pow(1.2, retryCount) * 300, 60 * 1000);
-  console.log(`Retry connection...timeout=${timeout}`);
-
-  setTimeout(() => {
-    switch (upstreamSocket.readyState) {
-      case WebSocket.CLOSED:
-      case WebSocket.CLOSING:
-        console.log("Trying to reconnect to upstream WebSocket...");
-        closeUpstream(upstreamSocket);
-
-        upstreamSocket = new WebSocket(upstreamWsUrl);
-        connectUpstream(upstreamSocket, clientStream, retryCount + 1);
-        break;
-      default:
-        console.log("Upstream WebSocket is already connected or connecting");
-        break;
-    }
-  }, timeout);
-}
-
-function waitForSocketReadyState(socket: WebSocket, callback: Function) {
-  if (socket.readyState === WebSocket.OPEN) {
-    callback();
-  } else {
-    socket.addEventListener("open", () => {
-      callback();
-    });
-  }
 }
 
 listen();
