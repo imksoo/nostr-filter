@@ -89,28 +89,28 @@ function listen() {
       }
 
       function sendMessageToUpstream(message: String) {
-        if (upstreamSocket.readyState === WebSocket.OPEN) {
-          upstreamSocket.send(message);
-        } else if (upstreamSocket.readyState !== WebSocket.CONNECTING) {
-          reconnect(upstreamSocket, clientStream);
-          waitForSocketReadyState(upstreamSocket, () => {
-            upstreamSocket.send(message);
-          });
+        switch (upstreamSocket.readyState) {
+          default:
+            reconnectUpstream(upstreamSocket, clientStream);
+          case WebSocket.OPEN:
+          case WebSocket.CONNECTING:
+            waitForSocketReadyState(upstreamSocket, () => {
+              upstreamSocket.send(message);
+            });
+            break;
         }
       }
     });
 
     clientStream.on("close", () => {
       console.log("Client WebSocket disconnected");
-      upstreamSocket.removeAllListeners(); // イベントリスナーをクリア
-      upstreamSocket.close();
+      closeUpstream(upstreamSocket);
       console.log("Upstream WebSocket disconnected");
     });
 
     clientStream.on("error", (error: Error) => {
       console.log("Client WebSocket error:", error);
-      upstreamSocket.removeAllListeners(); // イベントリスナーをクリア
-      upstreamSocket.close();
+      closeUpstream(upstreamSocket);
       console.log("Upstream WebSocket disconnected");
     });
 
@@ -134,12 +134,12 @@ function connectUpstream(
 
   upstreamSocket.on("close", () => {
     console.log("Upstream WebSocket disconnected by close event");
-    reconnect(upstreamSocket, clientStream, retryCount);
+    reconnectUpstream(upstreamSocket, clientStream, retryCount);
   });
 
   upstreamSocket.on("error", (error: Error) => {
     console.log("Upstream WebSocket error:", error);
-    reconnect(upstreamSocket, clientStream, retryCount);
+    reconnectUpstream(upstreamSocket, clientStream, retryCount);
   });
 
   upstreamSocket.on("message", async (data: WebSocket.Data) => {
@@ -148,8 +148,14 @@ function connectUpstream(
   });
 }
 
+// 上流のリレーサーバーとの接続を切断する
+function closeUpstream(upstreamSocket: WebSocket): void {
+  upstreamSocket.removeAllListeners(); // イベントリスナーをクリア
+  upstreamSocket.close();
+}
+
 // 上流のリレーサーバーとの再接続処理
-function reconnect(
+function reconnectUpstream(
   upstreamSocket: WebSocket,
   clientStream: WebSocket,
   retryCount = 0
@@ -163,8 +169,7 @@ function reconnect(
       case WebSocket.CLOSED:
       case WebSocket.CLOSING:
         console.log("Trying to reconnect to upstream WebSocket...");
-        upstreamSocket.removeAllListeners(); // イベントリスナーをクリア
-        upstreamSocket.close();
+        closeUpstream(upstreamSocket);
 
         upstreamSocket = new WebSocket(upstreamWsUrl);
         connectUpstream(upstreamSocket, clientStream, retryCount + 1);
