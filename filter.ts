@@ -63,9 +63,10 @@ function listen() {
         req.headers["x-forwarded-for"] ||
         req.socket.remoteAddress;
 
+      let shouldRelay = true;
+
       // kind1だけフィルタリングを行う
       if (event[0] === "EVENT" && event[1].kind === 1) {
-        let shouldRelay = true;
         // 正規表現パターンとのマッチ判定
         for (const filter of contentFilters) {
           if (filter.test(event[1].content)) {
@@ -73,22 +74,16 @@ function listen() {
             break;
           }
         }
-        if (shouldRelay) {
-          // 送信して良いと判断したメッセージは上流のWebSocketに送信
-          sendMessageToUpstream(message);
-        }
         // イベント内容とフィルターの判定結果をコンソールにログ出力
         console.log(
           `${shouldRelay ? "❔" : "🚫"} ${ip} : kind=${event[1].kind} pubkey=${
             event[1].pubkey
           } content=${JSON.stringify(event[1].content)}`
         );
-      } else {
-        // kind1以外はすべて上流のWebSocketに送信
-        sendMessageToUpstream(message);
       }
 
-      function sendMessageToUpstream(message: String) {
+      if (shouldRelay) {
+        // 送信して良いと判断したメッセージは上流のWebSocketに送信
         if (upstreamSocket.readyState === WebSocket.OPEN) {
           upstreamSocket.send(message);
         } else {
@@ -121,7 +116,7 @@ function listen() {
 // 上流のリレーサーバーとの接続
 function connectUpstream(upstreamSocket: WebSocket, clientStream: WebSocket) {
   upstreamSocket.on("open", () => {
-    console.log("Upstream WebSocket connected");
+    console.log(" -> Upstream WebSocket connected");
   });
 
   upstreamSocket.on("close", () => {
