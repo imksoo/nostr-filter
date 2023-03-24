@@ -156,10 +156,9 @@ function reconnect(
   retryCount = 0,
   callback: Function = () => {}
 ): void {
-  console.log(`Retry connection...`);
-
   // 再接続の間隔を0.3秒～60秒の間で指数関数的に増やす
   const timeout = Math.min(Math.pow(1.2, retryCount) * 300, 60 * 1000);
+  console.log(`Retry connection...timeout=${timeout}`);
 
   setTimeout(() => {
     switch (upstreamSocket.readyState) {
