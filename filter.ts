@@ -74,15 +74,8 @@ function listen() {
           }
         }
         if (shouldRelay) {
-          // 正規表現パターンにマッチしない場合は上流のWebSocketに送信
-          if (upstreamSocket.readyState === WebSocket.OPEN) {
-            upstreamSocket.send(message);
-          } else if (upstreamSocket.readyState !== WebSocket.CONNECTING) {
-            reconnect(upstreamSocket, clientStream);
-            waitForSocketReadyState(upstreamSocket, () => {
-              upstreamSocket.send(message);
-            });
-          }
+          // 送信して良いと判断したメッセージは上流のWebSocketに送信
+          sendMessageToUpstream(message);
         }
         // イベント内容とフィルターの判定結果をコンソールにログ出力
         console.log(
@@ -92,6 +85,10 @@ function listen() {
         );
       } else {
         // kind1以外はすべて上流のWebSocketに送信
+        sendMessageToUpstream(message);
+      }
+
+      function sendMessageToUpstream(message: String) {
         if (upstreamSocket.readyState === WebSocket.OPEN) {
           upstreamSocket.send(message);
         } else if (upstreamSocket.readyState !== WebSocket.CONNECTING) {
