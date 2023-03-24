@@ -77,8 +77,9 @@ function listen() {
           // 正規表現パターンにマッチしない場合は上流のWebSocketに送信
           if (upstreamSocket.readyState === WebSocket.OPEN) {
             upstreamSocket.send(message);
-          } else {
-            reconnect(upstreamSocket, clientStream, 0, () => {
+          } else if (upstreamSocket.readyState !== WebSocket.CONNECTING) {
+            reconnect(upstreamSocket, clientStream);
+            waitForSocketReadyState(upstreamSocket, () => {
               upstreamSocket.send(message);
             });
           }
@@ -94,7 +95,8 @@ function listen() {
         if (upstreamSocket.readyState === WebSocket.OPEN) {
           upstreamSocket.send(message);
         } else if (upstreamSocket.readyState !== WebSocket.CONNECTING) {
-          reconnect(upstreamSocket, clientStream, 0, () => {
+          reconnect(upstreamSocket, clientStream);
+          waitForSocketReadyState(upstreamSocket, () => {
             upstreamSocket.send(message);
           });
         }
@@ -153,8 +155,7 @@ function connectUpstream(
 function reconnect(
   upstreamSocket: WebSocket,
   clientStream: WebSocket,
-  retryCount = 0,
-  callback: Function = () => {}
+  retryCount = 0
 ): void {
   // 再接続の間隔を0.3秒～60秒の間で指数関数的に増やす
   const timeout = Math.min(Math.pow(1.2, retryCount) * 300, 60 * 1000);
@@ -173,12 +174,19 @@ function reconnect(
         break;
       default:
         console.log("Upstream WebSocket is already connected or connecting");
-        setTimeout(() => {
-          callback();
-        }, 1000);
         break;
     }
   }, timeout);
+}
+
+function waitForSocketReadyState(socket: WebSocket, callback: Function) {
+  if (socket.readyState === WebSocket.OPEN) {
+    callback();
+  } else {
+    socket.addEventListener("open", () => {
+      callback();
+    });
+  }
 }
 
 listen();
