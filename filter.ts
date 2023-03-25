@@ -46,69 +46,74 @@ function listen() {
   );
   // WebSocketサーバーの構成
   const wss = new WebSocket.Server({ server });
-  wss.on("connection", (clientSocket: WebSocket, req: http.IncomingMessage) => {
-    console.log("Client WebSocket connected");
+  wss.on(
+    "connection",
+    (downstreamSocket: WebSocket, req: http.IncomingMessage) => {
+      console.log("Client WebSocket connected");
 
-    let upstreamSocket = new WebSocket(upstreamWsUrl);
-    connectUpstream(upstreamSocket, clientSocket);
+      let upstreamSocket = new WebSocket(upstreamWsUrl);
+      connectUpstream(upstreamSocket, downstreamSocket);
 
-    // クライアントからメッセージを受信したとき
-    clientSocket.on("message", async (data: WebSocket.Data) => {
-      const message = data.toString();
-      const event = JSON.parse(message);
+      // クライアントからメッセージを受信したとき
+      downstreamSocket.on("message", async (data: WebSocket.Data) => {
+        const message = data.toString();
+        const event = JSON.parse(message);
 
-      // 接続元のクライアントIPを取得
-      const ip =
-        req.headers["x-real-ip"] ||
-        req.headers["x-forwarded-for"] ||
-        req.socket.remoteAddress;
+        // 接続元のクライアントIPを取得
+        const ip =
+          req.headers["x-real-ip"] ||
+          req.headers["x-forwarded-for"] ||
+          req.socket.remoteAddress;
 
-      let shouldRelay = true;
+        let shouldRelay = true;
 
-      // kind1だけフィルタリングを行う
-      if (event[0] === "EVENT" && event[1].kind === 1) {
-        // 正規表現パターンとのマッチ判定
-        for (const filter of contentFilters) {
-          if (filter.test(event[1].content)) {
-            shouldRelay = false;
-            break;
+        // kind1だけフィルタリングを行う
+        if (event[0] === "EVENT" && event[1].kind === 1) {
+          // 正規表現パターンとのマッチ判定
+          for (const filter of contentFilters) {
+            if (filter.test(event[1].content)) {
+              shouldRelay = false;
+              break;
+            }
+          }
+          // イベント内容とフィルターの判定結果をコンソールにログ出力
+          console.log(
+            `${shouldRelay ? "❔" : "🚫"} ${ip} : kind=${
+              event[1].kind
+            } pubkey=${event[1].pubkey} content=${JSON.stringify(
+              event[1].content
+            )}`
+          );
+        }
+
+        if (shouldRelay) {
+          // 送信して良いと判断したメッセージは上流のWebSocketに送信
+          if (upstreamSocket.readyState === WebSocket.OPEN) {
+            upstreamSocket.send(message);
+          } else {
+            downstreamSocket.close();
           }
         }
-        // イベント内容とフィルターの判定結果をコンソールにログ出力
-        console.log(
-          `${shouldRelay ? "❔" : "🚫"} ${ip} : kind=${event[1].kind} pubkey=${
-            event[1].pubkey
-          } content=${JSON.stringify(event[1].content)}`
-        );
-      }
+      });
 
-      if (shouldRelay) {
-        // 送信して良いと判断したメッセージは上流のWebSocketに送信
-        if (upstreamSocket.readyState === WebSocket.OPEN) {
-          upstreamSocket.send(message);
-        } else {
-          clientSocket.close();
-        }
-      }
-    });
+      downstreamSocket.on("close", () => {
+        console.log("Client WebSocket disconnected by close event");
+        upstreamSocket.close();
+        console.log(" -> Upstream WebSocket disconnected");
+      });
 
-    clientSocket.on("close", () => {
-      console.log("Client WebSocket disconnected by close event");
-      upstreamSocket.close();
-      console.log(" -> Upstream WebSocket disconnected");
-    });
+      downstreamSocket.on("error", (error: Error) => {
+        console.log("Client WebSocket error:", error);
+        upstreamSocket.close();
+        downstreamSocket.close();
+        console.log(" -> Upstream WebSocket disconnected");
+      });
 
-    clientSocket.on("error", (error: Error) => {
-      console.log("Client WebSocket error:", error);
-      upstreamSocket.close();
-      clientSocket.close();
-      console.log(" -> Upstream WebSocket disconnected");
-    });
-
-    clientSocket.pong = () => {
-      clientSocket.ping();
-    };
-  });
+      downstreamSocket.pong = () => {
+        downstreamSocket.ping();
+      };
+    }
+  );
   // HTTP+WebSocketサーバーの起動
   server.listen(listenPort);
 }
