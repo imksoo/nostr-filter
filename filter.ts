@@ -49,8 +49,6 @@ function listen() {
   wss.on(
     "connection",
     (downstreamSocket: WebSocket, req: http.IncomingMessage) => {
-      console.log("Client WebSocket connected");
-
       let upstreamSocket = new WebSocket(upstreamWsUrl);
       connectUpstream(upstreamSocket, downstreamSocket);
 
@@ -97,16 +95,12 @@ function listen() {
       });
 
       downstreamSocket.on("close", () => {
-        console.log("Client WebSocket disconnected by close event");
         upstreamSocket.close();
-        console.log(" -> Upstream WebSocket disconnected");
       });
 
       downstreamSocket.on("error", (error: Error) => {
-        console.log("Client WebSocket error:", error);
         upstreamSocket.close();
         downstreamSocket.close();
-        console.log(" -> Upstream WebSocket disconnected");
       });
 
       downstreamSocket.pong = () => {
@@ -121,20 +115,15 @@ function listen() {
 // 上流のリレーサーバーとの接続
 function connectUpstream(upstreamSocket: WebSocket, clientStream: WebSocket) {
   upstreamSocket.on("open", () => {
-    console.log(" -> Upstream WebSocket connected");
   });
 
   upstreamSocket.on("close", () => {
-    console.log("Upstream WebSocket disconnected by close event");
     clientStream.close();
-    console.log(" -> Client WebSocket disconnected");
   });
 
   upstreamSocket.on("error", (error: Error) => {
-    console.log("Upstream WebSocket error:", error);
     clientStream.close();
     upstreamSocket.close();
-    console.log(" -> Client WebSocket disconnected");
   });
 
   upstreamSocket.on("message", async (data: WebSocket.Data) => {
