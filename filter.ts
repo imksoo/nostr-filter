@@ -7,7 +7,7 @@ const listenPort = 8081; // クライアントからのWebSocket待ち受けポ�
 const upstreamHttpUrl = "http://localhost:8080"; // 上流のWebSocketサーバのURL
 const upstreamWsUrl = "ws://localhost:8080"; // 上流のWebSocketサーバのURL
 
-const contentFilters = [/avive/i, /web3/i, /lnbc/, /t\.me/, /nostr-vip\.top/, /running branle/, /1C-0OTP4DRCWJY17XvOHO/]; // 正規表現パターンの配列
+const contentFilters = [/avive/i, /web3/i, /lnbc/, /t\.me/, /nostr-vip\.top/, /running branle/, /1C-0OTP4DRCWJY17XvOHO/, /\$GPT/]; // 正規表現パターンの配列
 
 function listen() {
   console.log(`WebSocket server listening on ${listenPort}`);
