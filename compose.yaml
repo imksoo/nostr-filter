@@ -3,8 +3,8 @@ version: '3'
 services:
   filter:
     build: .
-    ports:
-      - "8081:8081"
+    # ports:
+    #   - "8081:8081"
     volumes:
       - "./index.html:/app/index.html"
     restart: always

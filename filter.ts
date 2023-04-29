@@ -13,7 +13,7 @@ const contentFilters = [
   /lnbc/,
   /t\.me/,
   /nostr-vip\.top/,
-  /running branle/,
+  // /running branle/, This word is used in nostr.watch
   /1C-0OTP4DRCWJY17XvOHO/,
   /\$GPT/,
 ]; // 正規表現パターンの配列

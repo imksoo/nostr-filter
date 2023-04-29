@@ -6,7 +6,7 @@ WORKDIR /app
 COPY filter.ts package.json package-lock.json tsconfig.json /app/
 
 # アプリケーションの依存関係をインストールする
-RUN npm install --production
+RUN npm install --omit=dev
 
 # アプリケーションをコンパイルする
 RUN npx tsc
