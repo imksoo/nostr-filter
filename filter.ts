@@ -132,24 +132,24 @@ function listen() {
 // 上流のリレーサーバーとの接続
 function connectUpstream(upstreamSocket: WebSocket, clientStream: WebSocket) {
   upstreamSocket.on("open", () => {
-    setIdleTimeout(upstreamSocket)
+    setIdleTimeout(upstreamSocket);
   });
 
   upstreamSocket.on("close", () => {
     clientStream.close();
-    clearIdleTimeout(upstreamSocket)
+    clearIdleTimeout(upstreamSocket);
   });
 
   upstreamSocket.on("error", (error: Error) => {
     clientStream.close();
     upstreamSocket.close();
-    clearIdleTimeout(upstreamSocket)
+    clearIdleTimeout(upstreamSocket);
   });
 
   upstreamSocket.on("message", async (data: WebSocket.Data) => {
     const message = data.toString();
     clientStream.send(message);
-    resetIdleTimeout(upstreamSocket)
+    resetIdleTimeout(upstreamSocket);
   });
 }
 
