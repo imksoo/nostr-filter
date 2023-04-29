@@ -7,7 +7,16 @@ const listenPort = 8081; // クライアントからのWebSocket待ち受けポ�
 const upstreamHttpUrl = "http://localhost:8080"; // 上流のWebSocketサーバのURL
 const upstreamWsUrl = "ws://localhost:8080"; // 上流のWebSocketサーバのURL
 
-const contentFilters = [/avive/i, /web3/i, /lnbc/, /t\.me/, /nostr-vip\.top/, /running branle/, /1C-0OTP4DRCWJY17XvOHO/, /\$GPT/]; // 正規表現パターンの配列
+const contentFilters = [
+  /avive/i,
+  /web3/i,
+  /lnbc/,
+  /t\.me/,
+  /nostr-vip\.top/,
+  /running branle/,
+  /1C-0OTP4DRCWJY17XvOHO/,
+  /\$GPT/,
+]; // 正規表現パターンの配列
 
 function listen() {
   console.log(`WebSocket server listening on ${listenPort}`);
@@ -52,8 +61,14 @@ function listen() {
       let upstreamSocket = new WebSocket(upstreamWsUrl);
       connectUpstream(upstreamSocket, downstreamSocket);
 
+      // クライアントとの接続が確立したら、アイドルタイムアウトを設定
+      setIdleTimeout(downstreamSocket);
+
       // クライアントからメッセージを受信したとき
       downstreamSocket.on("message", async (data: WebSocket.Data) => {
+        // メッセージを受信するたびに、タイムアウトをリセット
+        resetIdleTimeout(downstreamSocket);
+
         const message = data.toString();
         const event = JSON.parse(message);
 
@@ -96,6 +111,8 @@ function listen() {
 
       downstreamSocket.on("close", () => {
         upstreamSocket.close();
+        // クライアントが切断されたら、タイムアウトをクリア
+        clearIdleTimeout(downstreamSocket);
       });
 
       downstreamSocket.on("error", (error: Error) => {
@@ -114,8 +131,7 @@ function listen() {
 
 // 上流のリレーサーバーとの接続
 function connectUpstream(upstreamSocket: WebSocket, clientStream: WebSocket) {
-  upstreamSocket.on("open", () => {
-  });
+  upstreamSocket.on("open", () => {});
 
   upstreamSocket.on("close", () => {
     clientStream.close();
@@ -133,3 +149,40 @@ function connectUpstream(upstreamSocket: WebSocket, clientStream: WebSocket) {
 }
 
 listen();
+
+// ソケットとタイムアウトIDを関連付けるためのMap
+const idleTimeouts = new Map<WebSocket, NodeJS.Timeout>();
+
+// ソケットとタイムアウト値を関連付けるためのMap
+const timeoutValues = new Map<WebSocket, number>();
+
+// タイムアウト値のデフォルト
+const defaultTimeoutValue = 60 * 1000;
+
+function setIdleTimeout(
+  socket: WebSocket,
+  timeout: number = defaultTimeoutValue
+) {
+  const timeoutId = setTimeout(() => {
+    console.log("Idle timeout, closing connection");
+    socket.close();
+  }, timeout);
+
+  idleTimeouts.set(socket, timeoutId);
+  timeoutValues.set(socket, timeout);
+}
+
+function resetIdleTimeout(
+  socket: WebSocket,
+  defaultTimeout: number = defaultTimeoutValue
+) {
+  clearTimeout(idleTimeouts.get(socket));
+  const timeout = timeoutValues.get(socket) ?? defaultTimeout;
+  setIdleTimeout(socket, timeout); // タイムアウトを再利用、もしくはデフォルト値を使用
+}
+
+function clearIdleTimeout(socket: WebSocket) {
+  clearTimeout(idleTimeouts.get(socket));
+  idleTimeouts.delete(socket);
+  timeoutValues.delete(socket);
+}
