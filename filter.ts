@@ -3,9 +3,12 @@ import WebSocket from "ws";
 import fs from "fs";
 import path from "path";
 
-const listenPort = 8081; // クライアントからのWebSocket待ち受けポート
-const upstreamHttpUrl = "http://localhost:8080"; // 上流のWebSocketサーバのURL
-const upstreamWsUrl = "ws://localhost:8080"; // 上流のWebSocketサーバのURL
+const listenPort = process.env.LISTEN_PORT ?? 8081; // クライアントからのWebSocket待ち受けポート
+const upstreamHttpUrl = process.env.UPSTREAM_HTTP_URL ?? "http://localhost:8080"; // 上流のWebSocketサーバのURL
+const upstreamWsUrl = process.env.UPSTREAM_WS_URL ?? "ws://localhost:8080"; // 上流のWebSocketサーバのURL
+
+console.log(process.env)
+console.log({listenPort, upstreamHttpUrl, upstreamWsUrl})
 
 const contentFilters = [
   /avive/i,
