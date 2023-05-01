@@ -22,7 +22,11 @@ const contentFilters = [
   /\$GPT/,
 ]; // 正規表現パターンの配列
 
+// 全体の接続数
 let connectionCount = 0;
+
+// IPアドレスごとの接続数
+const connectionCountsByIP = new Map<string, number>();
 
 function logMemoryUsage() {
   setInterval(() => {
@@ -79,6 +83,29 @@ function listen() {
   wss.on(
     "connection",
     async (downstreamSocket: WebSocket, req: http.IncomingMessage) => {
+      // 接続元のクライアントIPを取得
+      const ip =
+        (typeof req.headers["x-real-ip"] === "string"
+          ? req.headers["x-real-ip"]
+          : undefined) ||
+        (typeof req.headers["x-forwarded-for"] === "string"
+          ? req.headers["x-forwarded-for"].split(",")[0].trim()
+          : undefined) ||
+        (typeof req.socket.remoteAddress === "string"
+          ? req.socket.remoteAddress
+          : "unknown-ip-addr");
+
+      // IPごとの接続数を取得・更新
+      const connectionCountForIP = (connectionCountsByIP.get(ip) ?? 0) + 1;
+
+      if (connectionCountForIP > 100) {
+        console.log(`Too many connections from ${ip}.`);
+        downstreamSocket.close(429, "Too many requests.");
+        return;
+      }
+
+      connectionCountsByIP.set(ip, connectionCountForIP);
+
       let upstreamSocket = new WebSocket(upstreamWsUrl);
       connectUpstream(upstreamSocket, downstreamSocket);
 
@@ -95,12 +122,6 @@ function listen() {
 
         const message = data.toString();
         const event = JSON.parse(message);
-
-        // 接続元のクライアントIPを取得
-        const ip =
-          req.headers["x-real-ip"] ||
-          req.headers["x-forwarded-for"] ||
-          req.socket.remoteAddress;
 
         let shouldRelay = true;
 
@@ -135,6 +156,7 @@ function listen() {
 
       downstreamSocket.on("close", () => {
         connectionCount--; // 接続が閉じられるたびにカウントを減らす
+        connectionCountsByIP.set(ip, connectionCountsByIP.get(ip) ?? 1 - 1);
 
         upstreamSocket.close();
         clearIdleTimeout(downstreamSocket);
@@ -142,6 +164,7 @@ function listen() {
 
       downstreamSocket.on("error", (error: Error) => {
         connectionCount--; // エラーが発生するたびにカウントを減らす
+        connectionCountsByIP.set(ip, connectionCountsByIP.get(ip) ?? 1 - 1);
 
         upstreamSocket.close();
         downstreamSocket.close();
