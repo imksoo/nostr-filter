@@ -4,11 +4,12 @@ import fs from "fs";
 import path from "path";
 
 const listenPort = process.env.LISTEN_PORT ?? 8081; // クライアントからのWebSocket待ち受けポート
-const upstreamHttpUrl = process.env.UPSTREAM_HTTP_URL ?? "http://localhost:8080"; // 上流のWebSocketサーバのURL
+const upstreamHttpUrl =
+  process.env.UPSTREAM_HTTP_URL ?? "http://localhost:8080"; // 上流のWebSocketサーバのURL
 const upstreamWsUrl = process.env.UPSTREAM_WS_URL ?? "ws://localhost:8080"; // 上流のWebSocketサーバのURL
 
-console.log(process.env)
-console.log({listenPort, upstreamHttpUrl, upstreamWsUrl})
+console.log(process.env);
+console.log({ listenPort, upstreamHttpUrl, upstreamWsUrl });
 
 const contentFilters = [
   /avive/i,
@@ -20,6 +21,23 @@ const contentFilters = [
   /1C-0OTP4DRCWJY17XvOHO/,
   /\$GPT/,
 ]; // 正規表現パターンの配列
+
+let connectionCount = 0;
+
+function logMemoryUsage() {
+  setInterval(() => {
+    const currentTime = new Date().toISOString();
+    const memoryUsage = process.memoryUsage();
+    const usedHeapSize = (memoryUsage.heapUsed / 1024 / 1024).toFixed(2);
+    const totalHeapSize = (memoryUsage.heapTotal / 1024 / 1024).toFixed(2);
+    const rssSize = (memoryUsage.rss / 1024 / 1024).toFixed(2);
+    console.log(
+      `logMemoryUsage : ${currentTime} Memory Usage: Used Heap: ${usedHeapSize} MB / Total Heap: ${totalHeapSize} MB / RSS: ${rssSize} MB / WebSocket connections: ${connectionCount}`
+    );
+  }, 10 * 60 * 1000); // 10分ごとに実行
+}
+
+logMemoryUsage();
 
 function listen() {
   console.log(`WebSocket server listening on ${listenPort}`);
@@ -60,12 +78,15 @@ function listen() {
   const wss = new WebSocket.Server({ server });
   wss.on(
     "connection",
-    (downstreamSocket: WebSocket, req: http.IncomingMessage) => {
+    async (downstreamSocket: WebSocket, req: http.IncomingMessage) => {
       let upstreamSocket = new WebSocket(upstreamWsUrl);
       connectUpstream(upstreamSocket, downstreamSocket);
 
       // クライアントとの接続が確立したら、アイドルタイムアウトを設定
       setIdleTimeout(downstreamSocket);
+
+      // 接続が確立されるたびにカウントを増やす
+      connectionCount++;
 
       // クライアントからメッセージを受信したとき
       downstreamSocket.on("message", async (data: WebSocket.Data) => {
@@ -113,11 +134,15 @@ function listen() {
       });
 
       downstreamSocket.on("close", () => {
+        connectionCount--; // 接続が閉じられるたびにカウントを減らす
+
         upstreamSocket.close();
         clearIdleTimeout(downstreamSocket);
       });
 
       downstreamSocket.on("error", (error: Error) => {
+        connectionCount--; // エラーが発生するたびにカウントを減らす
+
         upstreamSocket.close();
         downstreamSocket.close();
         clearIdleTimeout(downstreamSocket);
@@ -172,7 +197,6 @@ function setIdleTimeout(
   timeout: number = defaultTimeoutValue
 ) {
   const timeoutId = setTimeout(() => {
-    console.log("Idle timeout, closing connection");
     socket.close();
   }, timeout);
 
