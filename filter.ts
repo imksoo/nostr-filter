@@ -97,7 +97,7 @@ function loggingMemoryUsage(): void {
 loggingMemoryUsage(); // 起動時のヒープ状態を出力
 setInterval(() => {
   loggingMemoryUsage();
-}, 10 * 60 * 1000); // ヒープ状態を10分ごとに実行
+}, 1 * 60 * 1000); // ヒープ状態を1分ごとに実行
 
 function listen(): void {
   console.log(JSON.stringify({ msg: "Started", listenPort }));
