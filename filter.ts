@@ -17,7 +17,7 @@ console.log(
 );
 
 // NostrのEvent contentsのフィルタリング用正規表現パターンの配列
-const contentFilters = [
+const contentFilters: RegExp[] = [
   /avive/i,
   /web3/i,
   /lnbc/,
