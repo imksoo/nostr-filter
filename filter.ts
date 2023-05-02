@@ -5,13 +5,16 @@ import path from "path";
 import * as net from "net";
 import { Mutex } from "async-mutex";
 
-const listenPort = process.env.LISTEN_PORT ?? 8081; // クライアントからのWebSocket待ち受けポート
-const upstreamHttpUrl =
+const listenPort: number = parseInt(process.env.LISTEN_PORT ?? "8081"); // クライアントからのWebSocket待ち受けポート
+const upstreamHttpUrl: string =
   process.env.UPSTREAM_HTTP_URL ?? "http://localhost:8080"; // 上流のWebSocketサーバのURL
-const upstreamWsUrl = process.env.UPSTREAM_WS_URL ?? "ws://localhost:8080"; // 上流のWebSocketサーバのURL
+const upstreamWsUrl: string =
+  process.env.UPSTREAM_WS_URL ?? "ws://localhost:8080"; // 上流のWebSocketサーバのURL
 
-console.log(process.env);
-console.log({ listenPort, upstreamHttpUrl, upstreamWsUrl });
+console.log(JSON.stringify({ msg: "process.env", ...process.env }));
+console.log(
+  JSON.stringify({ msg: "configs", listenPort, upstreamHttpUrl, upstreamWsUrl })
+);
 
 // NostrのEvent contentsのフィルタリング用正規表現パターンの配列
 const contentFilters = [
@@ -78,7 +81,13 @@ function loggingMemoryUsage() {
   const totalHeapSize = (memoryUsage.heapTotal / 1024 / 1024).toFixed(2);
   const rssSize = (memoryUsage.rss / 1024 / 1024).toFixed(2);
   console.log(
-    `logMemoryUsage : ${currentTime} Memory Usage: Used Heap: ${usedHeapSize} MB / Total Heap: ${totalHeapSize} MB / RSS: ${rssSize} MB / WebSocket connections: ${connectionCount}`
+    JSON.stringify({
+      msg: "memoryUsage",
+      usedHeapSize,
+      totalHeapSize,
+      rssSize,
+      connectionCount,
+    })
   );
 }
 
@@ -88,7 +97,7 @@ setInterval(() => {
 }, 10 * 60 * 1000); // ヒープ状態を10分ごとに実行
 
 function listen() {
-  console.log(`WebSocket server listening on ${listenPort}`);
+  console.log(JSON.stringify({ msg: "Started", listenPort }));
 
   // HTTPサーバーの構成
   const server = http.createServer(
@@ -143,7 +152,13 @@ function listen() {
       const isIpBlocked = cidrRanges.some((cidr) => ipMatchesCidr(ip, cidr));
       if (isIpBlocked) {
         // IPアドレスがCIDR範囲内にある場合、接続を拒否
-        console.log(`🚫 Blocked client IP address by CIDR filter ${ip}`);
+        console.log(
+          JSON.stringify({
+            msg: "Blocked by CIDR filter",
+            class: "🚫",
+            ip,
+          })
+        );
         downstreamSocket.close(1008, "Forbidden");
         return;
       }
@@ -154,12 +169,24 @@ function listen() {
         connectionCountForIP = (connectionCountsByIP.get(ip) ?? 0) + 1;
       });
       if (connectionCountForIP > 100) {
-        console.log(`🚫 Too many connections from ${ip}`);
+        console.log(
+          JSON.stringify({
+            msg: "Blocked by too many connections",
+            class: "🚫",
+            ip,
+            connectionCountForIP,
+          })
+        );
         downstreamSocket.close(1008, "Too many requests.");
         return;
       } else {
         console.log(
-          `❔ Connected from ${ip} connections=${connectionCountForIP}`
+          JSON.stringify({
+            msg: "Connected",
+            class: "❔",
+            ip,
+            connectionCountForIP,
+          })
         );
         connectionCountsByIP.set(ip, connectionCountForIP);
       }
@@ -195,18 +222,26 @@ function listen() {
           }
           // イベント内容とフィルターの判定結果をコンソールにログ出力
           console.log(
-            `${shouldRelay ? "❔" : "🚫"} ${ip} : kind=${
-              event[1].kind
-            } pubkey=${event[1].pubkey} content=${JSON.stringify(
-              event[1].content
-            )}`
+            JSON.stringify({
+              msg: "EVENT",
+              class: `${shouldRelay ? "❔" : "🚫"}`,
+              ip,
+              connectionCountForIP,
+              kind: event[1].kind,
+              pubkey: event[1].pubkey,
+              content: JSON.stringify(event[1].content),
+            })
           );
         } else if (event[0] === "REQ") {
           // REQイベントの内容をコンソールにログ出力
           console.log(
-            `${shouldRelay ? "❔" : "🚫"} ${ip} : req=${JSON.stringify(
-              event[2]
-            )}`
+            JSON.stringify({
+              msg: "REQ",
+              class: `${shouldRelay ? "❔" : "🚫"}`,
+              ip,
+              connectionCountForIP,
+              req: JSON.stringify(event[2]),
+            })
           );
         }
 
@@ -230,14 +265,7 @@ function listen() {
       });
 
       downstreamSocket.on("error", async (error: Error) => {
-        connectionCount--; // エラーが発生するたびにカウントを減らす
-        await mutex.runExclusive(async () => {
-          connectionCountsByIP.set(ip, (connectionCountsByIP.get(ip) ?? 1) - 1);
-        });
-
         upstreamSocket.close();
-        downstreamSocket.close();
-        clearIdleTimeout(downstreamSocket);
       });
 
       downstreamSocket.pong = async () => {
