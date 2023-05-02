@@ -86,6 +86,7 @@ function loggingMemoryUsage(): void {
   console.log(
     JSON.stringify({
       msg: "memoryUsage",
+      currentTime,
       usedHeapSize,
       totalHeapSize,
       rssSize,
