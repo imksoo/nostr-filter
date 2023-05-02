@@ -152,10 +152,10 @@ function listen() {
         downstreamSocket.close(1008, "Too many requests.");
         return;
       } else {
+        console.log(`❔ Connected from ${ip} connections=${connectionCountForIP}`);
         connectionCountsByIP.set(ip, connectionCountForIP);
       }
 
-      console.log(`❔ Connected from ${ip}`);
 
       // 上流となるリレーサーバーと接続
       let upstreamSocket = new WebSocket(upstreamWsUrl);
