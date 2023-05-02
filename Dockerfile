@@ -15,4 +15,4 @@ RUN npx tsc
 EXPOSE 8081
 
 # アプリケーションを実行するコマンドを指定する
-CMD ["node", "filter.js"]
+CMD ["node", "--max-old-space-size=8192", "filter.js"]
