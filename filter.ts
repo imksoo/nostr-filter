@@ -299,6 +299,7 @@ function listen(): void {
       });
 
       downstreamSocket.on("error", async (error: Error) => {
+        downstreamSocket.close();
         upstreamSocket.close();
       });
 
