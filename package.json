@@ -12,7 +12,9 @@
     "@types/ws": "^8.5.4",
     "async-mutex": "^0.4.0",
     "typescript": "^5.0.2",
-    "ws": "^8.13.0"
+    "uuid": "^9.0.0",
+    "ws": "^8.13.0",
+    "@types/uuid": "^9.0.1"
   },
   "devDependencies": {
     "@types/node": "^18.15.3",

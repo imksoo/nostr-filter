@@ -4,6 +4,16 @@ import fs from "fs";
 import path from "path";
 import * as net from "net";
 import { Mutex } from "async-mutex";
+import { v4 as uuidv4 } from "uuid";
+
+class WebSocketWithID extends WebSocket {
+  id: string;
+
+  constructor(address: string, options?: WebSocket.ClientOptions) {
+    super(address, options);
+    this.id = uuidv4();
+  }
+}
 
 const listenPort: number = parseInt(process.env.LISTEN_PORT ?? "8081"); // クライアントからのWebSocket待ち受けポート
 const upstreamHttpUrl: string =
@@ -39,6 +49,7 @@ const cidrRanges: string[] = [
   "180.97.221.192/32",
   "62.197.152.37/32",
   "157.230.17.234/32",
+  "185.25.224.220/32",
 ];
 
 // CIDRマッチ用のフィルタ関数
@@ -75,7 +86,14 @@ let connectionCount = 0;
 // IPアドレスごとの接続数
 const connectionCountsByIP = new Map<string, number>();
 // Mutexインスタンスを作成
-const mutex = new Mutex();
+const connectionCountMutex = new Mutex();
+
+// サブスクリプションIDに紐付くIPアドレス
+const subscriptionIdAndIPs = new Map<string, string>();
+// サブスクリプションIDごとの転送量
+const transferredSizePerSubscriptionId = new Map<string, number>();
+// Mutexインスタンスを作成
+const subscriptionSizeMutex = new Mutex();
 
 function loggingMemoryUsage(): void {
   const currentTime = new Date().toISOString();
@@ -139,7 +157,10 @@ function listen(): void {
   const wss = new WebSocket.Server({ server });
   wss.on(
     "connection",
-    async (downstreamSocket: WebSocket, req: http.IncomingMessage) => {
+    async (downstreamSocket: WebSocketWithID, req: http.IncomingMessage) => {
+      // ソケットごとにユニークなIDを付与
+      downstreamSocket.id = uuidv4();
+
       // 接続元のクライアントIPを取得
       const ip =
         (typeof req.headers["x-real-ip"] === "string"
@@ -170,7 +191,7 @@ function listen(): void {
 
       // IPごとの接続数を取得・更新
       let connectionCountForIP = 0;
-      await mutex.runExclusive(async () => {
+      await connectionCountMutex.runExclusive(async () => {
         connectionCountForIP = (connectionCountsByIP.get(ip) ?? 0) + 1;
       });
       if (connectionCountForIP > 100) {
@@ -267,6 +288,10 @@ function listen(): void {
             );
           }
         } else if (event[0] === "REQ") {
+          const socketId = downstreamSocket.id;
+          const subscriptionId = event[1];
+          const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
+          subscriptionIdAndIPs.set(socketAndSubscriptionId, ip);
           // REQイベントの内容をコンソールにログ出力
           console.log(
             JSON.stringify({
@@ -274,6 +299,8 @@ function listen(): void {
               class: `${shouldRelay ? "❔" : "🚫"}`,
               ip,
               connectionCountForIP,
+              socketId,
+              subscriptionId,
               req: event[2],
             })
           );
@@ -291,7 +318,7 @@ function listen(): void {
 
       downstreamSocket.on("close", async () => {
         connectionCount--; // 接続が閉じられるたびにカウントを減らす
-        await mutex.runExclusive(async () => {
+        await connectionCountMutex.runExclusive(async () => {
           connectionCountsByIP.set(ip, (connectionCountsByIP.get(ip) ?? 1) - 1);
         });
         upstreamSocket.close();
@@ -315,7 +342,7 @@ function listen(): void {
 // 上流のリレーサーバーとの接続
 function connectUpstream(
   upstreamSocket: WebSocket,
-  downstreamSocket: WebSocket
+  downstreamSocket: WebSocketWithID
 ): void {
   upstreamSocket.on("open", async () => {
     setIdleTimeout(upstreamSocket);
@@ -336,6 +363,30 @@ function connectUpstream(
     downstreamSocket.send(message);
     resetIdleTimeout(downstreamSocket);
     resetIdleTimeout(upstreamSocket);
+
+    const result = JSON.parse(message);
+    const socketId = downstreamSocket.id;
+    const subscriptionId = result[1];
+    const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
+    let subscriptionSize;
+    await subscriptionSizeMutex.runExclusive(async () => {
+      subscriptionSize =
+        (transferredSizePerSubscriptionId.get(socketAndSubscriptionId) ?? 0) +
+        message.length;
+      transferredSizePerSubscriptionId.set(
+        socketAndSubscriptionId,
+        subscriptionSize
+      );
+    });
+    console.log(
+      JSON.stringify({
+        msg: "Subscription",
+        ip: subscriptionIdAndIPs.get(socketAndSubscriptionId) ?? "unknown",
+        socketId,
+        subscriptionId,
+        subscriptionSize,
+      })
+    );
   });
 }
 
