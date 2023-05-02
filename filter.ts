@@ -201,6 +201,13 @@ function listen() {
               event[1].content
             )}`
           );
+        } else if (event[0] === "REQ") {
+          // REQイベントの内容をコンソールにログ出力
+          console.log(
+            `${shouldRelay ? "❔" : "🚫"} ${ip} : req=${JSON.stringify(
+              event[2]
+            )}`
+          );
         }
 
         if (shouldRelay) {
