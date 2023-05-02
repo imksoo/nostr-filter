@@ -80,9 +80,9 @@ const mutex = new Mutex();
 function loggingMemoryUsage(): void {
   const currentTime = new Date().toISOString();
   const memoryUsage = process.memoryUsage();
-  const usedHeapSize = (memoryUsage.heapUsed / 1024 / 1024).toFixed(2);
-  const totalHeapSize = (memoryUsage.heapTotal / 1024 / 1024).toFixed(2);
-  const rssSize = (memoryUsage.rss / 1024 / 1024).toFixed(2);
+  const usedHeapSize = Math.round(memoryUsage.heapUsed / 1024 / 1024);
+  const totalHeapSize = Math.round(memoryUsage.heapTotal / 1024 / 1024);
+  const rssSize = Math.round(memoryUsage.rss / 1024 / 1024);
   console.log(
     JSON.stringify({
       msg: "memoryUsage",
