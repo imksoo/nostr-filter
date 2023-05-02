@@ -74,7 +74,7 @@ const connectionCountsByIP = new Map<string, number>();
 // Mutexインスタンスを作成
 const mutex = new Mutex();
 
-function loggingMemoryUsage() {
+function loggingMemoryUsage(): void {
   const currentTime = new Date().toISOString();
   const memoryUsage = process.memoryUsage();
   const usedHeapSize = (memoryUsage.heapUsed / 1024 / 1024).toFixed(2);
@@ -96,7 +96,7 @@ setInterval(() => {
   loggingMemoryUsage();
 }, 10 * 60 * 1000); // ヒープ状態を10分ごとに実行
 
-function listen() {
+function listen(): void {
   console.log(JSON.stringify({ msg: "Started", listenPort }));
 
   // HTTPサーバーの構成
@@ -279,7 +279,10 @@ function listen() {
 }
 
 // 上流のリレーサーバーとの接続
-function connectUpstream(upstreamSocket: WebSocket, clientStream: WebSocket) {
+function connectUpstream(
+  upstreamSocket: WebSocket,
+  clientStream: WebSocket
+): void {
   upstreamSocket.on("open", async () => {
     setIdleTimeout(upstreamSocket);
   });
@@ -316,7 +319,7 @@ const defaultTimeoutValue = 600 * 1000;
 function setIdleTimeout(
   socket: WebSocket,
   timeout: number = defaultTimeoutValue
-) {
+): void {
   const timeoutId = setTimeout(() => {
     socket.close();
   }, timeout);
@@ -328,13 +331,13 @@ function setIdleTimeout(
 function resetIdleTimeout(
   socket: WebSocket,
   defaultTimeout: number = defaultTimeoutValue
-) {
+): void {
   clearTimeout(idleTimeouts.get(socket));
   const timeout = timeoutValues.get(socket) ?? defaultTimeout;
   setIdleTimeout(socket, timeout); // タイムアウトを再利用、もしくはデフォルト値を使用
 }
 
-function clearIdleTimeout(socket: WebSocket) {
+function clearIdleTimeout(socket: WebSocket): void {
   clearTimeout(idleTimeouts.get(socket));
   idleTimeouts.delete(socket);
   timeoutValues.delete(socket);
