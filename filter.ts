@@ -227,6 +227,9 @@ function listen() {
               class: `${shouldRelay ? "❔" : "🚫"}`,
               ip,
               connectionCountForIP,
+              kind: event[1].kind,
+              pubkey: event[1].pubkey,
+              content: event[1].content,
               event: event[1],
             })
           );
