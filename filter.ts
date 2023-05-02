@@ -3,6 +3,7 @@ import WebSocket from "ws";
 import fs from "fs";
 import path from "path";
 import * as net from "net";
+import { Mutex } from "async-mutex";
 
 const listenPort = process.env.LISTEN_PORT ?? 8081; // クライアントからのWebSocket待ち受けポート
 const upstreamHttpUrl =
@@ -67,6 +68,8 @@ function ipMatchesCidr(ip: string, cidr: string): boolean {
 let connectionCount = 0;
 // IPアドレスごとの接続数
 const connectionCountsByIP = new Map<string, number>();
+// Mutexインスタンスを作成
+const mutex = new Mutex();
 
 function loggingMemoryUsage() {
   const currentTime = new Date().toISOString();
@@ -146,16 +149,20 @@ function listen() {
       }
 
       // IPごとの接続数を取得・更新
-      const connectionCountForIP = (connectionCountsByIP.get(ip) ?? 0) + 1;
+      let connectionCountForIP = 0;
+      await mutex.runExclusive(async () => {
+        connectionCountForIP = (connectionCountsByIP.get(ip) ?? 0) + 1;
+      });
       if (connectionCountForIP > 100) {
         console.log(`🚫 Too many connections from ${ip}`);
         downstreamSocket.close(1008, "Too many requests.");
         return;
       } else {
-        console.log(`❔ Connected from ${ip} connections=${connectionCountForIP}`);
+        console.log(
+          `❔ Connected from ${ip} connections=${connectionCountForIP}`
+        );
         connectionCountsByIP.set(ip, connectionCountForIP);
       }
-
 
       // 上流となるリレーサーバーと接続
       let upstreamSocket = new WebSocket(upstreamWsUrl);
@@ -206,24 +213,27 @@ function listen() {
         }
       });
 
-      downstreamSocket.on("close", () => {
+      downstreamSocket.on("close", async () => {
         connectionCount--; // 接続が閉じられるたびにカウントを減らす
-        connectionCountsByIP.set(ip, connectionCountsByIP.get(ip) ?? 1 - 1);
-
+        await mutex.runExclusive(async () => {
+          connectionCountsByIP.set(ip, (connectionCountsByIP.get(ip) ?? 1) - 1);
+        });
         upstreamSocket.close();
         clearIdleTimeout(downstreamSocket);
       });
 
-      downstreamSocket.on("error", (error: Error) => {
+      downstreamSocket.on("error", async (error: Error) => {
         connectionCount--; // エラーが発生するたびにカウントを減らす
-        connectionCountsByIP.set(ip, connectionCountsByIP.get(ip) ?? 1 - 1);
+        await mutex.runExclusive(async () => {
+          connectionCountsByIP.set(ip, (connectionCountsByIP.get(ip) ?? 1) - 1);
+        });
 
         upstreamSocket.close();
         downstreamSocket.close();
         clearIdleTimeout(downstreamSocket);
       });
 
-      downstreamSocket.pong = () => {
+      downstreamSocket.pong = async () => {
         downstreamSocket.ping();
       };
     }
@@ -234,16 +244,16 @@ function listen() {
 
 // 上流のリレーサーバーとの接続
 function connectUpstream(upstreamSocket: WebSocket, clientStream: WebSocket) {
-  upstreamSocket.on("open", () => {
+  upstreamSocket.on("open", async () => {
     setIdleTimeout(upstreamSocket);
   });
 
-  upstreamSocket.on("close", () => {
+  upstreamSocket.on("close", async () => {
     clientStream.close();
     clearIdleTimeout(upstreamSocket);
   });
 
-  upstreamSocket.on("error", (error: Error) => {
+  upstreamSocket.on("error", async (error: Error) => {
     clientStream.close();
     upstreamSocket.close();
     clearIdleTimeout(upstreamSocket);

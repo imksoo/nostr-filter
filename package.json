@@ -10,6 +10,7 @@
   "license": "ISC",
   "dependencies": {
     "@types/ws": "^8.5.4",
+    "async-mutex": "^0.4.0",
     "typescript": "^5.0.2",
     "ws": "^8.13.0"
   },
