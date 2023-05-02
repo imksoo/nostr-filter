@@ -227,9 +227,7 @@ function listen() {
               class: `${shouldRelay ? "❔" : "🚫"}`,
               ip,
               connectionCountForIP,
-              kind: event[1].kind,
-              pubkey: event[1].pubkey,
-              content: JSON.stringify(event[1].content),
+              event: event[1],
             })
           );
         } else if (event[0] === "REQ") {
@@ -240,7 +238,7 @@ function listen() {
               class: `${shouldRelay ? "❔" : "🚫"}`,
               ip,
               connectionCountForIP,
-              req: JSON.stringify(event[2]),
+              req: event[2],
             })
           );
         }
