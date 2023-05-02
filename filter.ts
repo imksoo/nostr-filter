@@ -304,6 +304,23 @@ function listen(): void {
               req: event[2],
             })
           );
+        } else if (event[0] === "CLOSE") {
+          const socketId = downstreamSocket.id;
+          const subscriptionId = event[1];
+          const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
+          subscriptionIdAndIPs.set(socketAndSubscriptionId, ip + " CLOSED");
+          // REQイベントの内容をコンソールにログ出力
+          console.log(
+            JSON.stringify({
+              msg: "CLOSE",
+              class: `${shouldRelay ? "❔" : "🚫"}`,
+              ip,
+              connectionCountForIP,
+              socketId,
+              subscriptionId,
+              req: event[2],
+            })
+          );
         }
 
         if (shouldRelay) {
@@ -366,6 +383,7 @@ function connectUpstream(
 
     const result = JSON.parse(message);
     const socketId = downstreamSocket.id;
+    const resultType = result[0];
     const subscriptionId = result[1];
     const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
     let subscriptionSize;
@@ -382,6 +400,7 @@ function connectUpstream(
       JSON.stringify({
         msg: "Subscription",
         ip: subscriptionIdAndIPs.get(socketAndSubscriptionId) ?? "unknown",
+        resultType,
         socketId,
         subscriptionId,
         subscriptionSize,
