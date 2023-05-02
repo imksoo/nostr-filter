@@ -28,6 +28,9 @@ const contentFilters: RegExp[] = [
   /\$GPT/,
 ];
 
+// ブロックするユーザーの公開鍵の配列
+const blockedPubkeys: string[] = [];
+
 // クライアントIPアドレスのCIDRフィルタ
 const cidrRanges: string[] = [
   "43.205.189.224/32",
@@ -154,8 +157,9 @@ function listen(): void {
         // IPアドレスがCIDR範囲内にある場合、接続を拒否
         console.log(
           JSON.stringify({
-            msg: "Blocked by CIDR filter",
+            msg: "Connecting",
             class: "🚫",
+            because: "Blocked by CIDR filter",
             ip,
           })
         );
@@ -171,8 +175,9 @@ function listen(): void {
       if (connectionCountForIP > 100) {
         console.log(
           JSON.stringify({
-            msg: "Blocked by too many connections",
+            msg: "Connecting",
             class: "🚫",
+            because: "Blocked by too many connections",
             ip,
             connectionCountForIP,
           })
@@ -210,29 +215,55 @@ function listen(): void {
         const event = JSON.parse(message);
 
         let shouldRelay = true;
-
+        let because = "";
         // kind1だけフィルタリングを行う
         if (event[0] === "EVENT" && event[1].kind === 1) {
           // 正規表現パターンとのマッチ判定
           for (const filter of contentFilters) {
             if (filter.test(event[1].content)) {
               shouldRelay = false;
+              because = "Blocked event by content filter";
               break;
             }
           }
+          // ブロックする公開鍵のリストとのマッチ判定
+          for (const block of blockedPubkeys) {
+            if (event[1].pubkey === block) {
+              shouldRelay = false;
+              because = "Blocked event by pubkey";
+              break;
+            }
+          }
+
           // イベント内容とフィルターの判定結果をコンソールにログ出力
-          console.log(
-            JSON.stringify({
-              msg: "EVENT",
-              class: `${shouldRelay ? "❔" : "🚫"}`,
-              ip,
-              connectionCountForIP,
-              kind: event[1].kind,
-              pubkey: event[1].pubkey,
-              content: event[1].content,
-              event: event[1],
-            })
-          );
+          if (shouldRelay) {
+            console.log(
+              JSON.stringify({
+                msg: "EVENT",
+                class: "❔",
+                ip,
+                connectionCountForIP,
+                kind: event[1].kind,
+                pubkey: event[1].pubkey,
+                content: event[1].content,
+                event: event[1],
+              })
+            );
+          } else {
+            console.log(
+              JSON.stringify({
+                msg: "EVENT",
+                class: "🚫",
+                because,
+                ip,
+                connectionCountForIP,
+                kind: event[1].kind,
+                pubkey: event[1].pubkey,
+                content: event[1].content,
+                event: event[1],
+              })
+            );
+          }
         } else if (event[0] === "REQ") {
           // REQイベントの内容をコンソールにログ出力
           console.log(
