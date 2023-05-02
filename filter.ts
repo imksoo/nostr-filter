@@ -211,6 +211,7 @@ function listen(): void {
       downstreamSocket.on("message", async (data: WebSocket.Data) => {
         // メッセージを受信するたびに、タイムアウトをリセット
         resetIdleTimeout(downstreamSocket);
+        resetIdleTimeout(upstreamSocket);
 
         const message = data.toString();
         const event = JSON.parse(message);
@@ -313,26 +314,26 @@ function listen(): void {
 // 上流のリレーサーバーとの接続
 function connectUpstream(
   upstreamSocket: WebSocket,
-  clientStream: WebSocket
+  downstreamSocket: WebSocket
 ): void {
   upstreamSocket.on("open", async () => {
     setIdleTimeout(upstreamSocket);
   });
 
   upstreamSocket.on("close", async () => {
-    clientStream.close();
+    downstreamSocket.close();
     clearIdleTimeout(upstreamSocket);
   });
 
   upstreamSocket.on("error", async (error: Error) => {
-    clientStream.close();
+    downstreamSocket.close();
     upstreamSocket.close();
-    clearIdleTimeout(upstreamSocket);
   });
 
   upstreamSocket.on("message", async (data: WebSocket.Data) => {
     const message = data.toString();
-    clientStream.send(message);
+    downstreamSocket.send(message);
+    resetIdleTimeout(downstreamSocket);
     resetIdleTimeout(upstreamSocket);
   });
 }
@@ -346,7 +347,7 @@ const idleTimeouts = new Map<WebSocket, NodeJS.Timeout>();
 const timeoutValues = new Map<WebSocket, number>();
 
 // タイムアウト値のデフォルト
-const defaultTimeoutValue = 600 * 1000;
+const defaultTimeoutValue = 10 * 60 * 1000;
 
 function setIdleTimeout(
   socket: WebSocket,
