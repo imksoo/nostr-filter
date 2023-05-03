@@ -329,6 +329,8 @@ function listen(): void {
           if (event[0] === "EVENT") {
             const blockedMessage = JSON.stringify([
               "OK",
+              event[1].id,
+              false,
               `blocked: ${because}`,
             ]);
             console.log(
