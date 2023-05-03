@@ -266,9 +266,6 @@ function listen(): void {
                 class: "❔",
                 ip,
                 connectionCountForIP,
-                kind: event[1].kind,
-                pubkey: event[1].pubkey,
-                content: event[1].content,
                 event: event[1],
               })
             );
@@ -280,9 +277,6 @@ function listen(): void {
                 because,
                 ip,
                 connectionCountForIP,
-                kind: event[1].kind,
-                pubkey: event[1].pubkey,
-                content: event[1].content,
                 event: event[1],
               })
             );
@@ -330,6 +324,40 @@ function listen(): void {
           } else {
             downstreamSocket.close();
           }
+        } else {
+          // ブロック対象のメッセージを送ってきたクライアントには警告メッセージを返却
+          if (event[0] === "EVENT") {
+            const blockedMessage = JSON.stringify([
+              "OK",
+              `blocked: ${because}`,
+            ]);
+            console.log(
+              JSON.stringify({
+                msg: "BLOCKED EVENT",
+                ip,
+                connectionCountForIP,
+                blockedMessage,
+                event,
+              })
+            );
+            downstreamSocket.send(blockedMessage);
+          } else {
+            const blockedMessage = JSON.stringify([
+              "NOTICE",
+              `blocked: ${because}`,
+            ]);
+            console.log(
+              JSON.stringify({
+                msg: "BLOCKED NOTICE",
+                ip,
+                connectionCountForIP,
+                blockedMessage,
+                event,
+              })
+            );
+            downstreamSocket.send(blockedMessage);
+          }
+          downstreamSocket.close();
         }
       });
 
