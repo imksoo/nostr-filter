@@ -438,11 +438,30 @@ function listen(): void {
       });
 
       downstreamSocket.on("error", async (error: Error) => {
+        console.log(
+          JSON.stringify({
+            msg: "DOWNSTREAM ERROR",
+            ip,
+            port,
+            socketId,
+            connectionCountForIP,
+            error,
+          })
+        );
         downstreamSocket.close();
         upstreamSocket.close();
       });
 
       downstreamSocket.pong = async () => {
+        console.log(
+          JSON.stringify({
+            msg: "PONG",
+            ip,
+            port,
+            socketId,
+            connectionCountForIP,
+          })
+        );
         downstreamSocket.ping();
       };
     }
@@ -457,15 +476,37 @@ function connectUpstream(
   downstreamSocket: WebSocketWithID
 ): void {
   upstreamSocket.on("open", async () => {
+    const socketId = downstreamSocket.id;
+    console.log(
+      JSON.stringify({
+        msg: "UPSTREAM CONNECTED",
+        socketId,
+      })
+    );
     setIdleTimeout(upstreamSocket);
   });
 
   upstreamSocket.on("close", async () => {
+    const socketId = downstreamSocket.id;
+    console.log(
+      JSON.stringify({
+        msg: "UPSTREAM DISCONNECTED",
+        socketId,
+      })
+    );
     downstreamSocket.close();
     clearIdleTimeout(upstreamSocket);
   });
 
   upstreamSocket.on("error", async (error: Error) => {
+    const socketId = downstreamSocket.id;
+    console.log(
+      JSON.stringify({
+        msg: "UPSTREAM ERROR",
+        socketId,
+        error,
+      })
+    );
     downstreamSocket.close();
     upstreamSocket.close();
   });
