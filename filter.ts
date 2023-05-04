@@ -355,7 +355,7 @@ function listen(): void {
           // REQイベントの内容をコンソールにログ出力
           console.log(
             JSON.stringify({
-              msg: "CLOSE",
+              msg: "CLOSE SUBSCRIPTION",
               ip,
               port,
               socketId,
