@@ -418,9 +418,21 @@ function listen(): void {
 
       downstreamSocket.on("close", async () => {
         connectionCount--; // 接続が閉じられるたびにカウントを減らす
+
+        let connectionCountForIP = 1;
         await connectionCountMutex.runExclusive(async () => {
-          connectionCountsByIP.set(ip, (connectionCountsByIP.get(ip) ?? 1) - 1);
+          connectionCountForIP = connectionCountsByIP.get(ip) ?? 1;
+          connectionCountsByIP.set(ip, connectionCountForIP - 1);
         });
+        console.log(
+          JSON.stringify({
+            msg: "DISCONNECTED",
+            ip,
+            port,
+            socketId,
+            connectionCountForIP,
+          })
+        );
         upstreamSocket.close();
         clearIdleTimeout(downstreamSocket);
       });
