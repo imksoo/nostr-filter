@@ -89,7 +89,8 @@ const connectionCountsByIP = new Map<string, number>();
 const connectionCountMutex = new Mutex();
 
 // サブスクリプションIDに紐付くIPアドレス
-const subscriptionIdAndIPs = new Map<string, string>();
+const subscriptionIdAndIPAddress = new Map<string, string>();
+const subscriptionIdAndPortNumber = new Map<string, number>();
 // サブスクリプションIDごとの転送量
 const transferredSizePerSubscriptionId = new Map<string, number>();
 // Mutexインスタンスを作成
@@ -159,7 +160,8 @@ function listen(): void {
     "connection",
     async (downstreamSocket: WebSocketWithID, req: http.IncomingMessage) => {
       // ソケットごとにユニークなIDを付与
-      downstreamSocket.id = uuidv4();
+      const socketId = uuidv4();
+      downstreamSocket.id = socketId;
 
       // 接続元のクライアントIPを取得
       const ip =
@@ -173,6 +175,12 @@ function listen(): void {
           ? req.socket.remoteAddress
           : "unknown-ip-addr");
 
+      // 接続元のクライアントIPを取得
+      const port =
+        typeof req.headers["x-real-port"] === "string"
+          ? parseInt(req.headers["x-real-port"])
+          : 0;
+
       // IPアドレスが指定したCIDR範囲内にあるかどうかを判断
       const isIpBlocked = cidrRanges.some((cidr) => ipMatchesCidr(ip, cidr));
       if (isIpBlocked) {
@@ -180,10 +188,11 @@ function listen(): void {
         // IPアドレスがCIDR範囲内にある場合、接続を拒否
         console.log(
           JSON.stringify({
-            msg: "Connecting",
-            class: "🚫",
+            msg: "CONNECTING BLOCKED",
             because,
             ip,
+            port,
+            socketId,
           })
         );
         const blockedMessage = JSON.stringify([
@@ -194,6 +203,8 @@ function listen(): void {
           JSON.stringify({
             msg: "BLOCKED NOTICE",
             ip,
+            port,
+            socketId,
             because,
             blockedMessage,
           })
@@ -212,10 +223,11 @@ function listen(): void {
         const because = "Blocked by too many connections";
         console.log(
           JSON.stringify({
-            msg: "Connecting",
-            class: "🚫",
+            msg: "CONNECTING BLOCKED",
             because,
             ip,
+            port,
+            socketId,
             connectionCountForIP,
           })
         );
@@ -227,6 +239,9 @@ function listen(): void {
           JSON.stringify({
             msg: "BLOCKED NOTICE",
             ip,
+            port,
+            socketId,
+            connectionCountForIP,
             because,
             blockedMessage,
           })
@@ -237,9 +252,10 @@ function listen(): void {
       } else {
         console.log(
           JSON.stringify({
-            msg: "Connected",
-            class: "❔",
+            msg: "CONNECTED",
             ip,
+            port,
+            socketId,
             connectionCountForIP,
           })
         );
@@ -291,8 +307,9 @@ function listen(): void {
             console.log(
               JSON.stringify({
                 msg: "EVENT",
-                class: "❔",
                 ip,
+                port,
+                socketId,
                 connectionCountForIP,
                 event: event[1],
               })
@@ -300,45 +317,49 @@ function listen(): void {
           } else {
             console.log(
               JSON.stringify({
-                msg: "EVENT",
-                class: "🚫",
+                msg: "EVENT BLOCKED",
                 because,
                 ip,
+                port,
+                socketId,
                 connectionCountForIP,
                 event: event[1],
               })
             );
           }
         } else if (event[0] === "REQ") {
-          const socketId = downstreamSocket.id;
           const subscriptionId = event[1];
           const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
-          subscriptionIdAndIPs.set(socketAndSubscriptionId, ip);
+          subscriptionIdAndIPAddress.set(socketAndSubscriptionId, ip);
+          subscriptionIdAndPortNumber.set(socketAndSubscriptionId, port);
           // REQイベントの内容をコンソールにログ出力
           console.log(
             JSON.stringify({
               msg: "REQ",
-              class: `${shouldRelay ? "❔" : "🚫"}`,
               ip,
-              connectionCountForIP,
+              port,
               socketId,
+              connectionCountForIP,
               subscriptionId,
               req: event[2],
             })
           );
         } else if (event[0] === "CLOSE") {
-          const socketId = downstreamSocket.id;
           const subscriptionId = event[1];
           const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
-          subscriptionIdAndIPs.set(socketAndSubscriptionId, ip + " CLOSED");
+          subscriptionIdAndIPAddress.set(
+            socketAndSubscriptionId,
+            ip + " CLOSED"
+          );
+          subscriptionIdAndPortNumber.set(socketAndSubscriptionId, -port);
           // REQイベントの内容をコンソールにログ出力
           console.log(
             JSON.stringify({
               msg: "CLOSE",
-              class: `${shouldRelay ? "❔" : "🚫"}`,
               ip,
-              connectionCountForIP,
+              port,
               socketId,
+              connectionCountForIP,
               subscriptionId,
               req: event[2],
             })
@@ -365,6 +386,8 @@ function listen(): void {
               JSON.stringify({
                 msg: "BLOCKED EVENT",
                 ip,
+                port,
+                socketId,
                 connectionCountForIP,
                 blockedMessage,
                 event,
@@ -380,6 +403,8 @@ function listen(): void {
               JSON.stringify({
                 msg: "BLOCKED NOTICE",
                 ip,
+                port,
+                socketId,
                 connectionCountForIP,
                 blockedMessage,
                 event,
@@ -444,6 +469,10 @@ function connectUpstream(
     const resultType = result[0];
     const subscriptionId = result[1];
     const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
+    const ip =
+      subscriptionIdAndIPAddress.get(socketAndSubscriptionId) ??
+      "???.???.???.???";
+    const port = subscriptionIdAndPortNumber.get(socketAndSubscriptionId) ?? -1;
     let subscriptionSize;
     await subscriptionSizeMutex.runExclusive(async () => {
       subscriptionSize =
@@ -456,8 +485,9 @@ function connectUpstream(
     });
     console.log(
       JSON.stringify({
-        msg: "Subscription",
-        ip: subscriptionIdAndIPs.get(socketAndSubscriptionId) ?? "unknown",
+        msg: "SUBSCRIBE",
+        ip,
+        port,
         resultType,
         socketId,
         subscriptionId,
