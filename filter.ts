@@ -176,15 +176,29 @@ function listen(): void {
       // IPアドレスが指定したCIDR範囲内にあるかどうかを判断
       const isIpBlocked = cidrRanges.some((cidr) => ipMatchesCidr(ip, cidr));
       if (isIpBlocked) {
+        const because = "Blocked by CIDR filter";
         // IPアドレスがCIDR範囲内にある場合、接続を拒否
         console.log(
           JSON.stringify({
             msg: "Connecting",
             class: "🚫",
-            because: "Blocked by CIDR filter",
+            because,
             ip,
           })
         );
+        const blockedMessage = JSON.stringify([
+          "NOTICE",
+          `blocked: ${because}`,
+        ]);
+        console.log(
+          JSON.stringify({
+            msg: "BLOCKED NOTICE",
+            ip,
+            because,
+            blockedMessage,
+          })
+        );
+        downstreamSocket.send(blockedMessage);
         downstreamSocket.close(1008, "Forbidden");
         return;
       }
@@ -195,15 +209,29 @@ function listen(): void {
         connectionCountForIP = (connectionCountsByIP.get(ip) ?? 0) + 1;
       });
       if (connectionCountForIP > 100) {
+        const because = "Blocked by too many connections";
         console.log(
           JSON.stringify({
             msg: "Connecting",
             class: "🚫",
-            because: "Blocked by too many connections",
+            because,
             ip,
             connectionCountForIP,
           })
         );
+        const blockedMessage = JSON.stringify([
+          "NOTICE",
+          `blocked: ${because}`,
+        ]);
+        console.log(
+          JSON.stringify({
+            msg: "BLOCKED NOTICE",
+            ip,
+            because,
+            blockedMessage,
+          })
+        );
+        downstreamSocket.send(blockedMessage);
         downstreamSocket.close(1008, "Too many requests.");
         return;
       } else {
