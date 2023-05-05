@@ -16,10 +16,15 @@
     c.scrollTo(0, c.scrollHeight)
   }
 
+  function flush_console() {
+    document.getElementById('console').value = ""
+  }
+
   function connect() {
     const ws = new WebSocket("wss://" + location.hostname);
 
     ws.onclose = ws.onerror = function () {
+      flush_console();
       console.log("Connecting...");
       setTimeout(connect, 3000);
     };
