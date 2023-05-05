@@ -283,6 +283,7 @@ function listen(): void {
 
         let shouldRelay = true;
         let because = "";
+        let isMessageEdited = false;
         // kind1だけフィルタリングを行う
         if (event[0] === "EVENT" && event[1].kind === 1) {
           // 正規表現パターンとのマッチ判定
@@ -344,6 +345,28 @@ function listen(): void {
               req: event[2],
             })
           );
+
+          if (!event[2].limit || event[2].limit > 500) {
+            event[2].limit = 500;
+            isMessageEdited = true;
+
+            because = "Invalid or excessive value for limit property.";
+            const warningMessage = JSON.stringify([
+              "NOTICE",
+              `warning: ${because}`,
+            ]);
+            console.log(
+              JSON.stringify({
+                msg: "WARNING NOTICE",
+                ip,
+                port,
+                socketId,
+                connectionCountForIP,
+                warningMessage,
+                event,
+              })
+            );
+          }
         } else if (event[0] === "CLOSE") {
           const subscriptionId = event[1];
           const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
@@ -369,7 +392,12 @@ function listen(): void {
         if (shouldRelay) {
           // 送信して良いと判断したメッセージは上流のWebSocketに送信
           if (upstreamSocket.readyState === WebSocket.OPEN) {
-            upstreamSocket.send(message);
+            if (isMessageEdited) {
+              const messageEdited = JSON.stringify(event);
+              upstreamSocket.send(messageEdited);
+            } else {
+              upstreamSocket.send(message);
+            }
           } else {
             downstreamSocket.close();
           }
