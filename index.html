@@ -21,11 +21,12 @@
 
     ws.onclose = ws.onerror = function () {
       console.log("Connecting...");
-      setTimeout(connect, 1000);
+      setTimeout(connect, 3000);
     };
     ws.onopen = function () {
       ws.send(
-        JSON.stringify(["REQ", crypto.randomUUID(), { kinds: [1], since: Math.floor(new Date() / 1000 - 60 * 10) }])
+        // JSON.stringify(["REQ", crypto.randomUUID(), { kinds: [1], since: Math.floor(new Date() / 1000 - 60 * 10) }])
+        JSON.stringify(["REQ", crypto.randomUUID(), { kinds: [1], limit: 1 }])
       );
     };
     ws.onmessage = async function (e) {
