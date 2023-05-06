@@ -545,10 +545,30 @@ function connectUpstream(
 
   upstreamSocket.on("message", async (data: WebSocket.Data) => {
     const message = data.toString();
-    downstreamSocket.send(message);
+    const event = JSON.parse(message);
     resetIdleTimeout(downstreamSocket);
     resetIdleTimeout(upstreamSocket);
 
+    let shouldRelay = true;
+    let because = "";
+    if (event[0] === "EVENT" && event[2].kind === 1) {
+      // 正規表現パターンとのマッチ判定
+      for (const filter of contentFilters) {
+        if (filter.test(event[2].content)) {
+          shouldRelay = false;
+          because = "Blocked event by content filter";
+          break;
+        }
+      }
+      // ブロックする公開鍵のリストとのマッチ判定
+      for (const block of blockedPubkeys) {
+        if (event[2].pubkey === block) {
+          shouldRelay = false;
+          because = "Blocked event by pubkey";
+          break;
+        }
+      }
+    }
     const result = JSON.parse(message);
     const socketId = downstreamSocket.id;
     const resultType = result[0];
@@ -579,6 +599,20 @@ function connectUpstream(
         subscriptionSize,
       })
     );
+    if (shouldRelay) {
+      downstreamSocket.send(message);
+    } else {
+      console.log(
+        JSON.stringify({
+          msg: "EVENT MUTED",
+          because,
+          ip,
+          port,
+          socketId,
+          event,
+        })
+      );
+    }
   });
 }
 
