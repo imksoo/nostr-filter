@@ -36,6 +36,7 @@ const contentFilters: RegExp[] = [
   // /running branle/, This word is used in nostr.watch
   /1C-0OTP4DRCWJY17XvOHO/,
   /\$GPT/,
+  /Claim your free \$OP/,
 ];
 
 // ブロックするユーザーの公開鍵の配列
