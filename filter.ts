@@ -37,6 +37,7 @@ const contentFilters: RegExp[] = [
   /1C-0OTP4DRCWJY17XvOHO/,
   /\$GPT/,
   /Claim your free \$OP/,
+  /shop\.55uu\.wang/,
 ];
 
 // ブロックするユーザーの公開鍵の配列
@@ -51,6 +52,7 @@ const cidrRanges: string[] = [
   "62.197.152.37/32",
   "157.230.17.234/32",
   "185.25.224.220/32",
+  "35.231.153.85/32",
 ];
 
 // CIDRマッチ用のフィルタ関数
