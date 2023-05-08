@@ -20,3 +20,7 @@ services:
       net.ipv4.tcp_max_syn_backlog: 1024
       net.core.somaxconn: 65535
     restart: always
+    logging:
+      driver: journald
+      options:
+        tag: "{{.Name}}"
