@@ -133,7 +133,7 @@ function listen(): void {
             res.writeHead(200, { "Content-Type": contentType });
             res.end(data);
           }
-        }); */
+        });
       } else {
         // Upgrade以外のリクエストとNIP-11を上流に転送する
         const proxyReq = http.request(
