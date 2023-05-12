@@ -7,14 +7,16 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "Kirino Minato <kirino.minato@gmail.com>",
-  "license": "ISC",
+  "license": "MIT License",
   "dependencies": {
+    "@types/mime-types": "^2.1.1",
+    "@types/uuid": "^9.0.1",
     "@types/ws": "^8.5.4",
     "async-mutex": "^0.4.0",
+    "mime-types": "^2.1.35",
     "typescript": "^5.0.2",
     "uuid": "^9.0.0",
-    "ws": "^8.13.0",
-    "@types/uuid": "^9.0.1"
+    "ws": "^8.13.0"
   },
   "devDependencies": {
     "@types/node": "^18.15.3",
