@@ -131,20 +131,23 @@ function listen(): void {
     async (req: http.IncomingMessage, res: http.ServerResponse) => {
       if (req.url === "/" && req.headers.accept !== "application/nostr+json") {
         // リレー自身のURLに通常のWebブラウザーからアクセスされたら、とりあえずindex.htmlへリダイレクトする
+        console.log(JSON.stringify({ msg: "HTTP GET", url: req.url }));
         res.writeHead(301, { Location: "/index.html" });
         res.end();
       } else if (req.url && req.headers.accept !== "application/nostr+json") {
         // staticディレクトリ配下の静的ファイルを返却する
+        console.log(JSON.stringify({ msg: "HTTP GET", url: req.url }));
         const filePath = path.join(__dirname, "/static/", req.url);
-        console.log(filePath)
         const contentType =
           mime.contentType(path.extname(filePath)) ||
           "application/octet-stream";
         fs.readFile(filePath, (err, data) => {
           if (err) {
+            console.log(JSON.stringify({ msg: "HTTP RESOURCE NOT FOUND", url: req.url }));
             res.writeHead(200, { "Content-Type": "text/html" });
             res.end("Please use a Nostr client to connect...\n");
           } else {
+            console.log(JSON.stringify({ msg: "HTTP RESPONSE", url: req.url, contentType, length: data.length }));
             res.writeHead(200, { "Content-Type": contentType });
             res.end(data);
           }
