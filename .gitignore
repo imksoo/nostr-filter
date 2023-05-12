@@ -1,4 +1,5 @@
 node_modules/
+static/favicon.ico
 
 *.js
 .env
