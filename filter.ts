@@ -28,16 +28,6 @@ console.log(
 
 // NostrのEvent contentsのフィルタリング用正規表現パターンの配列
 const contentFilters: RegExp[] = [
-  /avive/i,
-  /web3/i,
-  /lnbc/,
-  /t\.me/,
-  /nostr-vip\.top/,
-  // /running branle/, This word is used in nostr.watch
-  /1C-0OTP4DRCWJY17XvOHO/,
-  /\$GPT/,
-  /Claim your free \$OP/,
-  /shop\.55uu\.wang/,
 ];
 
 // ブロックするユーザーの公開鍵の配列
@@ -45,14 +35,6 @@ const blockedPubkeys: string[] = [];
 
 // クライアントIPアドレスのCIDRフィルタ
 const cidrRanges: string[] = [
-  "43.205.189.224/32",
-  "34.173.202.51/32",
-  "129.205.113.128/25",
-  "180.97.221.192/32",
-  "62.197.152.37/32",
-  "157.230.17.234/32",
-  "185.25.224.220/32",
-  "35.231.153.85/32",
 ];
 
 // CIDRマッチ用のフィルタ関数
@@ -130,14 +112,16 @@ function listen(): void {
     async (req: http.IncomingMessage, res: http.ServerResponse) => {
       // Webブラウザーからアクセスされたら、index.htmlかデフォルトのコンテンツを返却する
       if (req.url === "/" && req.headers.accept !== "application/nostr+json") {
-        res.writeHead(200, { "Content-Type": "text/html" });
+	res.writeHead(301, { "Location": "/index.html" } );
+	res.end();
+        /* res.writeHead(200, { "Content-Type": "text/html" });
         fs.readFile(path.join(__dirname, "index.html"), (err, data) => {
           if (err) {
             res.end("Please use a Nostr client to connect...\n");
           } else {
             res.end(data);
           }
-        });
+        }); */
       } else {
         // Upgrade以外のリクエストとNIP-11を上流に転送する
         const proxyReq = http.request(
