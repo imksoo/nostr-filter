@@ -3,7 +3,7 @@ FROM node:latest
 
 # アプリケーションのソースコードをコンテナ内にコピーする
 WORKDIR /app
-COPY filter.ts package.json package-lock.json tsconfig.json /app/
+COPY *.ts package.json package-lock.json tsconfig.json /app/
 
 # アプリケーションの依存関係をインストールする
 RUN npm install --omit=dev

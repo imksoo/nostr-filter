@@ -152,6 +152,9 @@ function listen(): void {
 
       // 接続元のクライアントIPを取得
       const ip =
+        (typeof req.headers["CloudFront-Viewer-Address"] === "string"
+          ? req.headers["CloudFront-Viewer-Address"].split(":")[0]
+          : undefined) ||
         (typeof req.headers["x-real-ip"] === "string"
           ? req.headers["x-real-ip"]
           : undefined) ||
@@ -164,9 +167,12 @@ function listen(): void {
 
       // 接続元のクライアントIPを取得
       const port =
-        typeof req.headers["x-real-port"] === "string"
+        (typeof req.headers["CloudFront-Viewer-Address"] === "string"
+          ? parseInt(req.headers["CloudFront-Viewer-Address"].split(":")[1])
+          : undefined) ||
+        (typeof req.headers["x-real-port"] === "string"
           ? parseInt(req.headers["x-real-port"])
-          : 0;
+          : 0);
 
       // IPアドレスが指定したCIDR範囲内にあるかどうかを判断
       const isIpBlocked = cidrRanges.some((cidr) => ipMatchesCidr(ip, cidr));
