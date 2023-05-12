@@ -6,7 +6,7 @@ services:
     ports:
       - "8081:8081"
     volumes:
-      - "./index.html:/app/index.html"
+      - "./static/:/app/static/"
     env_file:
       - ./.env
     sysctls:

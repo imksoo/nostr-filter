@@ -5,6 +5,7 @@ import path from "path";
 import * as net from "net";
 import { Mutex } from "async-mutex";
 import { v4 as uuidv4 } from "uuid";
+import * as mime from "mime-types";
 
 class WebSocketWithID extends WebSocket {
   id: string;
@@ -128,13 +129,23 @@ function listen(): void {
   // HTTPサーバーの構成
   const server = http.createServer(
     async (req: http.IncomingMessage, res: http.ServerResponse) => {
-      // Webブラウザーからアクセスされたら、index.htmlかデフォルトのコンテンツを返却する
       if (req.url === "/" && req.headers.accept !== "application/nostr+json") {
-        res.writeHead(200, { "Content-Type": "text/html" });
-        fs.readFile(path.join(__dirname, "index.html"), (err, data) => {
+        // リレー自身のURLに通常のWebブラウザーからアクセスされたら、とりあえずindex.htmlへリダイレクトする
+        res.writeHead(301, { Location: "/index.html" });
+        res.end();
+      } else if (req.url && req.headers.accept !== "application/nostr+json") {
+        // staticディレクトリ配下の静的ファイルを返却する
+        const filePath = path.join(__dirname, "/static/", req.url);
+        console.log(filePath)
+        const contentType =
+          mime.contentType(path.extname(filePath)) ||
+          "application/octet-stream";
+        fs.readFile(filePath, (err, data) => {
           if (err) {
+            res.writeHead(200, { "Content-Type": "text/html" });
             res.end("Please use a Nostr client to connect...\n");
           } else {
+            res.writeHead(200, { "Content-Type": contentType });
             res.end(data);
           }
         });
