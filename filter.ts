@@ -125,11 +125,20 @@ function listen(): void {
           "application/octet-stream";
         fs.readFile(filePath, (err, data) => {
           if (err) {
-            console.log(JSON.stringify({ msg: "HTTP RESOURCE NOT FOUND", url: req.url }));
+            console.log(
+              JSON.stringify({ msg: "HTTP RESOURCE NOT FOUND", url: req.url })
+            );
             res.writeHead(200, { "Content-Type": "text/html" });
             res.end("Please use a Nostr client to connect...\n");
           } else {
-            console.log(JSON.stringify({ msg: "HTTP RESPONSE", url: req.url, contentType, length: data.length }));
+            console.log(
+              JSON.stringify({
+                msg: "HTTP RESPONSE",
+                url: req.url,
+                contentType,
+                length: data.length,
+              })
+            );
             res.writeHead(200, { "Content-Type": contentType });
             res.end(data);
           }
@@ -487,19 +496,6 @@ function listen(): void {
         downstreamSocket.close();
         upstreamSocket.close();
       });
-
-      downstreamSocket.pong = async () => {
-        console.log(
-          JSON.stringify({
-            msg: "PONG",
-            ip,
-            port,
-            socketId,
-            connectionCountForIP,
-          })
-        );
-        downstreamSocket.ping();
-      };
     }
   );
   // HTTP+WebSocketサーバーの起動
