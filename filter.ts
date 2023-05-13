@@ -514,19 +514,6 @@ function listen(): void {
         downstreamSocket.close();
         upstreamSocket.close();
       });
-
-      downstreamSocket.pong = async () => {
-        console.log(
-          JSON.stringify({
-            msg: "PONG",
-            ip,
-            port,
-            socketId,
-            connectionCountForIP,
-          })
-        );
-        downstreamSocket.ping();
-      };
     }
   );
   // HTTP+WebSocketサーバーの起動
