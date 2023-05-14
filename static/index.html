@@ -63,9 +63,18 @@
   connect()
 </script>
 <style>
+  #terms {
+    width: 100%;
+    height: 10%;
+    overflow-y: scroll;
+    word-break: break-all;
+    font-family: 'IBM Plex Mono', 'Yusei Magic', monospace;
+    font-size: 6pt;
+  }
+
   #console {
     width: 100%;
-    height: 100%;
+    height: 90%;
     overflow-y: scroll;
     word-break: break-all;
     font-family: 'IBM Plex Mono', 'Yusei Magic', monospace;
@@ -74,7 +83,95 @@
 </head>
 
 <body>
+  <div id="terms"></div>
   <textarea id="console" disabled></textarea>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script>
+    document.getElementById('terms').innerHTML = marked.parse(`
+  # Nostrリレー利用規約
+
+## 第1条 (適用範囲)
+
+1. 本規約は、私が管理する以下のNostrリレーサービス（以下、当リレー）を利用するすべてのユーザーに適用されます。
+  * relay.nostr.wirednet.jp
+  * relay-jp.nostr.wirednet.jp
+  * ipv6.nostr.wirednet.jp
+  * その他、wirednet.jpドメインで提供される同種のNostrリレーサービス (実験用など)
+
+## 第2条 (アクセスログの取得と管理)
+
+1. 当リレーは、ユーザーが通信したときのアクセスログを一定期間保存します。
+2. アクセスログは、システムの維持・管理、不正アクセスなどの防止、当リレーに対する過大なリクエストなどのトラフィック分析、または司法当局からの求めがあった場合等の正当な理由に基づき、内部で利用するものとします。
+3. アクセスログは適切に管理し、前項に定める場合を除き、第三者に提供することはありません。
+
+## 第3条 (投稿内容の管理)
+
+1. ユーザーは、違法であったり公序良俗に反する書き込みをしてはなりません。
+2. 当リレーは、違法であったり公序良俗に反すると判断される書き込みを、管理者の判断により非表示にできます。
+
+## 第4条 (免責事項)
+
+1. ユーザーの書き込み内容について、当リレーは一切の責任を負いません。
+2. 当リレーは、システムの故障、メンテナンス、火災、停電、自然災害、ウイルス、第三者の不正行為など、当リレーの合理的な管理範囲を超える事由（不可抗力）により、データ破損やサービスの停止が生ずることがあります。
+3. 前項にあげた事象が発生した時に、ユーザーが被った損害について一切の責任を負いません。
+
+## 第5条 (規約の改定)
+
+1. 当リレーは、必要と認めた場合には、ユーザーに通知することなく本規約を変更することがあります。規約の変更は、当リレーのトップページに掲示することで通知の代わりとします。
+
+## 第6条 (適用法と管轄裁判所)
+
+1. 本規約および当リレーの利用に関しては、日本法にしたがって解釈されるものとします。
+2. 本規約または当リレーの利用に関連する紛争については、東京地方裁判所を第一審の専属的合意管轄裁判所とします。
+
+以上
+
+## 更新日: 2023年5月14日
+
+===
+
+Please note that the Japanese version of these Terms of Service is the official version, and the English version is provided for reference only. In the event of any discrepancy between the two versions, the Japanese version shall prevail.
+
+# Nostr Relay Terms of Service
+
+## Section 1 (Scope of Application)
+
+1. These terms and conditions apply to all users who use the following Nostr Relay Services (hereinafter, "the Relay") that I manage:
+  * relay.nostr.wirednet.jp
+  * relay-jp.nostr.wirednet.jp
+  * ipv6.nostr.wirednet.jp
+  * Other similar Nostr relay services provided under the wirednet.jp domain (for experiments, etc.)
+
+## Section 2 (Access Log Acquisition and Management)
+
+1. The Relay saves access logs for a certain period when users communicate.
+2. Access logs are used internally for legitimate reasons such as system maintenance and management, prevention of unauthorized access, traffic analysis for excessive requests to the Relay, or when required by law enforcement agencies.
+3. Access logs are properly managed and will not be provided to third parties, except as specified in the previous paragraph.
+
+## Section 3 (Post Content Management)
+
+1. Users must not post content that is illegal or against public order and morals.
+2. The Relay may hide posts that are deemed to be illegal or against public order and morals at the discretion of the administrator.
+
+## Section 4 (Disclaimer)
+
+1. The Relay assumes no responsibility for the content of user posts.
+2. The Relay may experience data corruption or service interruption due to causes beyond the reasonable control of the Relay (force majeure), such as system failure, maintenance, fire, power outage, natural disasters, viruses, or unauthorized actions by third parties.
+3. The Relay assumes no responsibility for any damage suffered by the user in the event of the occurrence of the events mentioned in the previous paragraph.
+
+## Section 5 (Revision of Terms)
+
+1. The Relay may change these terms and conditions without notifying users if deemed necessary. Changes to the terms and conditions will be notified by posting on the top page of the Relay.
+
+## Section 6 (Governing Law and Jurisdiction)
+
+1. These terms and conditions and the use of the Relay will be governed by and construed in accordance with the laws of Japan.
+2. Users agree to resolve any disputes related to these terms and conditions or the use of the Relay in the Tokyo District Court, and agree to submit to the personal jurisdiction of such court.
+The End
+
+## Last Updated: May 14, 2023
+`)  </script>
 </body>
 
 </html>
