@@ -317,24 +317,30 @@ function listen(): void {
         let because = "";
         let isMessageEdited = false;
         // kind1だけフィルタリングを行う
-        if (event[0] === "EVENT" && event[1].kind === 1) {
-          // 正規表現パターンとのマッチ判定
-          for (const filter of contentFilters) {
-            if (filter.test(event[1].content)) {
-              shouldRelay = false;
-              because = "Blocked event by content filter";
-              break;
-            }
-          }
-          // ブロックする公開鍵のリストとのマッチ判定
-          for (const block of blockedPubkeys) {
-            if (event[1].pubkey === block) {
-              shouldRelay = false;
-              because = "Blocked event by pubkey";
-              break;
-            }
-          }
+        if (event[0] === "EVENT") {
+          const subscriptionId = event[1].id;
+          const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
+          subscriptionIdAndIPAddress.set(socketAndSubscriptionId, ip);
+          subscriptionIdAndPortNumber.set(socketAndSubscriptionId, port);
 
+          if (event[1].kind === 1) {
+            // 正規表現パターンとのマッチ判定
+            for (const filter of contentFilters) {
+              if (filter.test(event[1].content)) {
+                shouldRelay = false;
+                because = "Blocked event by content filter";
+                break;
+              }
+            }
+            // ブロックする公開鍵のリストとのマッチ判定
+            for (const block of blockedPubkeys) {
+              if (event[1].pubkey === block) {
+                shouldRelay = false;
+                because = "Blocked event by pubkey";
+                break;
+              }
+            }
+          }
           // イベント内容とフィルターの判定結果をコンソールにログ出力
           if (shouldRelay) {
             console.log(
@@ -421,6 +427,17 @@ function listen(): void {
               subscriptionSize: transferredSizePerSubscriptionId.get(
                 socketAndSubscriptionId
               ),
+            })
+          );
+        } else {
+          console.log(
+            JSON.stringify({
+              msg: "UNKNOWN",
+              ip,
+              port,
+              socketId,
+              connectionCountForIP,
+              message: event,
             })
           );
         }
@@ -603,17 +620,31 @@ function listen(): void {
               subscriptionSize
             );
           });
-          console.log(
-            JSON.stringify({
-              msg: "SUBSCRIBE",
-              ip,
-              port,
-              resultType,
-              socketId,
-              subscriptionId,
-              subscriptionSize,
-            })
-          );
+          if (resultType === "OK") {
+            console.log(
+              JSON.stringify({
+                msg: "EVENT WRITE",
+                ip,
+                port,
+                resultType,
+                socketId,
+                subscriptionId,
+                subscriptionSize,
+              })
+            );
+          } else {
+            console.log(
+              JSON.stringify({
+                msg: "SUBSCRIBE",
+                ip,
+                port,
+                resultType,
+                socketId,
+                subscriptionId,
+                subscriptionSize,
+              })
+            );
+          }
           if (shouldRelay) {
             downstreamSocket.send(message);
           } else {
