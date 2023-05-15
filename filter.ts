@@ -74,14 +74,6 @@ const connectionCountsByIP = new Map<string, number>();
 // Mutexインスタンスを作成
 const connectionCountMutex = new Mutex();
 
-// サブスクリプションIDに紐付くIPアドレス
-const subscriptionIdAndIPAddress = new Map<string, string>();
-const subscriptionIdAndPortNumber = new Map<string, number>();
-// サブスクリプションIDごとの転送量
-const transferredSizePerSubscriptionId = new Map<string, number>();
-// Mutexインスタンスを作成
-const subscriptionSizeMutex = new Mutex();
-
 function loggingMemoryUsage(): void {
   const currentTime = new Date().toISOString();
   const memoryUsage = process.memoryUsage();
@@ -167,6 +159,14 @@ function listen(): void {
   wss.on(
     "connection",
     async (downstreamSocket: WebSocketWithID, req: http.IncomingMessage) => {
+      // サブスクリプションIDに紐付くIPアドレス
+      const subscriptionIdAndIPAddress = new Map<string, string>();
+      const subscriptionIdAndPortNumber = new Map<string, number>();
+      // サブスクリプションIDごとの転送量
+      const transferredSizePerSubscriptionId = new Map<string, number>();
+      // Mutexインスタンスを作成
+      const subscriptionSizeMutex = new Mutex();
+
       // ソケットごとにユニークなIDを付与
       const socketId = uuidv4();
       downstreamSocket.id = socketId;
@@ -364,11 +364,10 @@ function listen(): void {
             event[2].limit = 500;
             isMessageEdited = true;
 
-            /*
-            because = "Invalid or excessive value for limit property.";
+            because = "limit must be less than or equal to 500.";
             const warningMessage = JSON.stringify([
               "NOTICE",
-              `warning: ${because}`,
+              `invalid: REQ ${event[1]} ${because}`,
             ]);
             console.log(
               JSON.stringify({
@@ -382,7 +381,6 @@ function listen(): void {
               })
             );
             downstreamSocket.send(warningMessage);
-            */
           }
         } else if (event[0] === "CLOSE") {
           const subscriptionId = event[1];
@@ -402,6 +400,9 @@ function listen(): void {
               connectionCountForIP,
               subscriptionId,
               req: event[2],
+              subscriptionSize: transferredSizePerSubscriptionId.get(
+                socketAndSubscriptionId
+              ),
             })
           );
         }
@@ -496,124 +497,125 @@ function listen(): void {
         downstreamSocket.close();
         upstreamSocket.close();
       });
+
+      // 上流のリレーサーバーとの接続
+      function connectUpstream(
+        upstreamSocket: WebSocket,
+        downstreamSocket: WebSocketWithID
+      ): void {
+        upstreamSocket.on("open", async () => {
+          const socketId = downstreamSocket.id;
+          console.log(
+            JSON.stringify({
+              msg: "UPSTREAM CONNECTED",
+              socketId,
+            })
+          );
+          setIdleTimeout(upstreamSocket);
+        });
+
+        upstreamSocket.on("close", async () => {
+          const socketId = downstreamSocket.id;
+          console.log(
+            JSON.stringify({
+              msg: "UPSTREAM DISCONNECTED",
+              socketId,
+            })
+          );
+          downstreamSocket.close();
+          clearIdleTimeout(upstreamSocket);
+        });
+
+        upstreamSocket.on("error", async (error: Error) => {
+          const socketId = downstreamSocket.id;
+          console.log(
+            JSON.stringify({
+              msg: "UPSTREAM ERROR",
+              socketId,
+              error,
+            })
+          );
+          downstreamSocket.close();
+          upstreamSocket.close();
+        });
+
+        upstreamSocket.on("message", async (data: WebSocket.Data) => {
+          const message = data.toString();
+          const event = JSON.parse(message);
+          resetIdleTimeout(downstreamSocket);
+          resetIdleTimeout(upstreamSocket);
+
+          let shouldRelay = true;
+          let because = "";
+          if (event[0] === "EVENT" && event[2].kind === 1) {
+            // 正規表現パターンとのマッチ判定
+            for (const filter of contentFilters) {
+              if (filter.test(event[2].content)) {
+                shouldRelay = false;
+                because = "Blocked event by content filter";
+                break;
+              }
+            }
+            // ブロックする公開鍵のリストとのマッチ判定
+            for (const block of blockedPubkeys) {
+              if (event[2].pubkey === block) {
+                shouldRelay = false;
+                because = "Blocked event by pubkey";
+                break;
+              }
+            }
+          }
+          const result = JSON.parse(message);
+          const socketId = downstreamSocket.id;
+          const resultType = result[0];
+          const subscriptionId = result[1];
+          const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
+          const ip =
+            subscriptionIdAndIPAddress.get(socketAndSubscriptionId) ??
+            "???.???.???.???";
+          const port =
+            subscriptionIdAndPortNumber.get(socketAndSubscriptionId) ?? -1;
+          let subscriptionSize;
+          await subscriptionSizeMutex.runExclusive(async () => {
+            subscriptionSize =
+              (transferredSizePerSubscriptionId.get(socketAndSubscriptionId) ??
+                0) + message.length;
+            transferredSizePerSubscriptionId.set(
+              socketAndSubscriptionId,
+              subscriptionSize
+            );
+          });
+          console.log(
+            JSON.stringify({
+              msg: "SUBSCRIBE",
+              ip,
+              port,
+              resultType,
+              socketId,
+              subscriptionId,
+              subscriptionSize,
+            })
+          );
+          if (shouldRelay) {
+            downstreamSocket.send(message);
+          } else {
+            console.log(
+              JSON.stringify({
+                msg: "EVENT MUTED",
+                because,
+                ip,
+                port,
+                socketId,
+                event,
+              })
+            );
+          }
+        });
+      }
     }
   );
   // HTTP+WebSocketサーバーの起動
   server.listen(listenPort);
-}
-
-// 上流のリレーサーバーとの接続
-function connectUpstream(
-  upstreamSocket: WebSocket,
-  downstreamSocket: WebSocketWithID
-): void {
-  upstreamSocket.on("open", async () => {
-    const socketId = downstreamSocket.id;
-    console.log(
-      JSON.stringify({
-        msg: "UPSTREAM CONNECTED",
-        socketId,
-      })
-    );
-    setIdleTimeout(upstreamSocket);
-  });
-
-  upstreamSocket.on("close", async () => {
-    const socketId = downstreamSocket.id;
-    console.log(
-      JSON.stringify({
-        msg: "UPSTREAM DISCONNECTED",
-        socketId,
-      })
-    );
-    downstreamSocket.close();
-    clearIdleTimeout(upstreamSocket);
-  });
-
-  upstreamSocket.on("error", async (error: Error) => {
-    const socketId = downstreamSocket.id;
-    console.log(
-      JSON.stringify({
-        msg: "UPSTREAM ERROR",
-        socketId,
-        error,
-      })
-    );
-    downstreamSocket.close();
-    upstreamSocket.close();
-  });
-
-  upstreamSocket.on("message", async (data: WebSocket.Data) => {
-    const message = data.toString();
-    const event = JSON.parse(message);
-    resetIdleTimeout(downstreamSocket);
-    resetIdleTimeout(upstreamSocket);
-
-    let shouldRelay = true;
-    let because = "";
-    if (event[0] === "EVENT" && event[2].kind === 1) {
-      // 正規表現パターンとのマッチ判定
-      for (const filter of contentFilters) {
-        if (filter.test(event[2].content)) {
-          shouldRelay = false;
-          because = "Blocked event by content filter";
-          break;
-        }
-      }
-      // ブロックする公開鍵のリストとのマッチ判定
-      for (const block of blockedPubkeys) {
-        if (event[2].pubkey === block) {
-          shouldRelay = false;
-          because = "Blocked event by pubkey";
-          break;
-        }
-      }
-    }
-    const result = JSON.parse(message);
-    const socketId = downstreamSocket.id;
-    const resultType = result[0];
-    const subscriptionId = result[1];
-    const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
-    const ip =
-      subscriptionIdAndIPAddress.get(socketAndSubscriptionId) ??
-      "???.???.???.???";
-    const port = subscriptionIdAndPortNumber.get(socketAndSubscriptionId) ?? -1;
-    let subscriptionSize;
-    await subscriptionSizeMutex.runExclusive(async () => {
-      subscriptionSize =
-        (transferredSizePerSubscriptionId.get(socketAndSubscriptionId) ?? 0) +
-        message.length;
-      transferredSizePerSubscriptionId.set(
-        socketAndSubscriptionId,
-        subscriptionSize
-      );
-    });
-    console.log(
-      JSON.stringify({
-        msg: "SUBSCRIBE",
-        ip,
-        port,
-        resultType,
-        socketId,
-        subscriptionId,
-        subscriptionSize,
-      })
-    );
-    if (shouldRelay) {
-      downstreamSocket.send(message);
-    } else {
-      console.log(
-        JSON.stringify({
-          msg: "EVENT MUTED",
-          because,
-          ip,
-          port,
-          socketId,
-          event,
-        })
-      );
-    }
-  });
 }
 
 listen();
