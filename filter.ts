@@ -420,6 +420,9 @@ function listen(): void {
               connectionCountForIP,
               subscriptionId,
               req: event[2],
+              subscriptionSize: transferredSizePerSubscriptionId.get(
+                socketAndSubscriptionId
+              ),
             })
           );
         }
