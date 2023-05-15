@@ -382,11 +382,10 @@ function listen(): void {
             event[2].limit = 500;
             isMessageEdited = true;
 
-            /*
-            because = "Invalid or excessive value for limit property.";
+            because = "limit must be less than or equal to 500.";
             const warningMessage = JSON.stringify([
               "NOTICE",
-              `warning: ${because}`,
+              `invalid: REQ ${event[1]} ${because}`,
             ]);
             console.log(
               JSON.stringify({
@@ -400,7 +399,6 @@ function listen(): void {
               })
             );
             downstreamSocket.send(warningMessage);
-            */
           }
         } else if (event[0] === "CLOSE") {
           const subscriptionId = event[1];
