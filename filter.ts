@@ -366,6 +366,7 @@ function listen(): void {
             })
           );
 
+          /* REQのFilterが大きな結果を返しそうなときにNOTICEする <= いったん騒々しすぎるので止める
           if (!event[2].limit || event[2].limit > 500) {
             event[2].limit = 500;
             isMessageEdited = true;
@@ -387,7 +388,7 @@ function listen(): void {
               })
             );
             downstreamSocket.send(warningMessage);
-          }
+          } // */
         } else if (event[0] === "CLOSE") {
           const subscriptionId = event[1];
           const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
