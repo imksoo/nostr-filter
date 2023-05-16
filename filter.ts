@@ -7,15 +7,6 @@ import { Mutex } from "async-mutex";
 import { v4 as uuidv4 } from "uuid";
 import * as mime from "mime-types";
 
-class WebSocketWithID extends WebSocket {
-  id: string;
-
-  constructor(address: string, options?: WebSocket.ClientOptions) {
-    super(address, options);
-    this.id = uuidv4();
-  }
-}
-
 const listenPort: number = parseInt(process.env.LISTEN_PORT ?? "8081"); // クライアントからのWebSocket待ち受けポート
 const upstreamHttpUrl: string =
   process.env.UPSTREAM_HTTP_URL ?? "http://localhost:8080"; // 上流のWebSocketサーバのURL
@@ -176,7 +167,7 @@ function listen(): void {
   const wss = new WebSocket.Server({ server });
   wss.on(
     "connection",
-    async (downstreamSocket: WebSocketWithID, req: http.IncomingMessage) => {
+    async (downstreamSocket: WebSocket, req: http.IncomingMessage) => {
       // サブスクリプションIDに紐付くIPアドレス
       const subscriptionIdAndIPAddress = new Map<string, string>();
       const subscriptionIdAndPortNumber = new Map<string, number>();
@@ -187,7 +178,6 @@ function listen(): void {
 
       // ソケットごとにユニークなIDを付与
       const socketId = uuidv4();
-      downstreamSocket.id = socketId;
 
       // 接続元のクライアントIPを取得
       const ip =
@@ -538,10 +528,9 @@ function listen(): void {
       // 上流のリレーサーバーとの接続
       function connectUpstream(
         upstreamSocket: WebSocket,
-        downstreamSocket: WebSocketWithID
+        downstreamSocket: WebSocket
       ): void {
         upstreamSocket.on("open", async () => {
-          const socketId = downstreamSocket.id;
           console.log(
             JSON.stringify({
               msg: "UPSTREAM CONNECTED",
@@ -552,7 +541,6 @@ function listen(): void {
         });
 
         upstreamSocket.on("close", async () => {
-          const socketId = downstreamSocket.id;
           console.log(
             JSON.stringify({
               msg: "UPSTREAM DISCONNECTED",
@@ -564,7 +552,6 @@ function listen(): void {
         });
 
         upstreamSocket.on("error", async (error: Error) => {
-          const socketId = downstreamSocket.id;
           console.log(
             JSON.stringify({
               msg: "UPSTREAM ERROR",
@@ -603,25 +590,7 @@ function listen(): void {
             }
           }
           const result = JSON.parse(message);
-          const socketId = downstreamSocket.id;
           const resultType = result[0];
-          const subscriptionId = result[1];
-          const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
-          const ip =
-            subscriptionIdAndIPAddress.get(socketAndSubscriptionId) ??
-            "???.???.???.???";
-          const port =
-            subscriptionIdAndPortNumber.get(socketAndSubscriptionId) ?? -1;
-          let subscriptionSize;
-          await subscriptionSizeMutex.runExclusive(async () => {
-            subscriptionSize =
-              (transferredSizePerSubscriptionId.get(socketAndSubscriptionId) ??
-                0) + message.length;
-            transferredSizePerSubscriptionId.set(
-              socketAndSubscriptionId,
-              subscriptionSize
-            );
-          });
           if (resultType === "OK") {
             console.log(
               JSON.stringify({
@@ -630,11 +599,34 @@ function listen(): void {
                 port,
                 resultType,
                 socketId,
-                subscriptionId,
-                subscriptionSize,
+                eventId: result[1],
+              })
+            );
+          } else if (resultType === "NOTICE") {
+            console.log(
+              JSON.stringify({
+                msg: "NOTICE",
+                ip,
+                port,
+                resultType,
+                socketId,
+                message: result,
               })
             );
           } else {
+            const subscriptionId = result[1];
+            const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
+            let subscriptionSize;
+            await subscriptionSizeMutex.runExclusive(async () => {
+              subscriptionSize =
+                (transferredSizePerSubscriptionId.get(
+                  socketAndSubscriptionId
+                ) ?? 0) + message.length;
+              transferredSizePerSubscriptionId.set(
+                socketAndSubscriptionId,
+                subscriptionSize
+              );
+            });
             console.log(
               JSON.stringify({
                 msg: "SUBSCRIBE",
