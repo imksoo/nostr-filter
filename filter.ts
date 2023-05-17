@@ -181,8 +181,11 @@ function listen(): void {
 
       // 接続元のクライアントIPを取得
       const ip =
-        (typeof req.headers["CloudFront-Viewer-Address"] === "string"
-          ? req.headers["CloudFront-Viewer-Address"].split(":")[0]
+        (typeof req.headers["cloudfront-viewer-address"] === "string"
+          ? req.headers["cloudfront-viewer-address"]
+              .split(":")
+              .slice(0, -1)
+              .join(":")
           : undefined) ||
         (typeof req.headers["x-real-ip"] === "string"
           ? req.headers["x-real-ip"]
@@ -194,16 +197,18 @@ function listen(): void {
           ? req.socket.remoteAddress
           : "unknown-ip-addr");
 
-      // 接続元のクライアントIPを取得
+      // 接続元のクライアントPortを取得
       const port =
-        (typeof req.headers["CloudFront-Viewer-Address"] === "string"
-          ? parseInt(req.headers["CloudFront-Viewer-Address"].split(":")[1])
+        (typeof req.headers["cloudfront-viewer-address"] === "string"
+          ? parseInt(
+              req.headers["cloudfront-viewer-address"].split(":").slice(-1)[0]
+            )
           : undefined) ||
         (typeof req.headers["x-real-port"] === "string"
           ? parseInt(req.headers["x-real-port"])
           : 0);
 
-      // IPアドレスが指定したCIDR範囲内にあるかどうかを判断
+          // IPアドレスが指定したCIDR範囲内にあるかどうかを判断
       const isIpBlocked = cidrRanges.some((cidr) => ipMatchesCidr(ip, cidr));
       if (isIpBlocked) {
         const because = "Blocked by CIDR filter";
