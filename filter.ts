@@ -208,7 +208,7 @@ function listen(): void {
           ? parseInt(req.headers["x-real-port"])
           : 0);
 
-          // IPアドレスが指定したCIDR範囲内にあるかどうかを判断
+      // IPアドレスが指定したCIDR範囲内にあるかどうかを判断
       const isIpBlocked = cidrRanges.some((cidr) => ipMatchesCidr(ip, cidr));
       if (isIpBlocked) {
         const because = "Blocked by CIDR filter";
@@ -440,17 +440,31 @@ function listen(): void {
         }
 
         if (shouldRelay) {
+          // 送信が成功したかどうかを確認するフラグ
+          let isMessageSent = false;
+
           // 送信して良いと判断したメッセージは上流のWebSocketに送信
-          if (upstreamSocket.readyState === WebSocket.OPEN) {
-            if (isMessageEdited) {
-              const messageEdited = JSON.stringify(event);
-              upstreamSocket.send(messageEdited);
-            } else {
-              upstreamSocket.send(message);
+          let intervalId = setInterval(() => {
+            if (upstreamSocket.readyState === WebSocket.OPEN) {
+              let msg = message;
+              if (isMessageEdited) {
+                msg = JSON.stringify(event);
+              }
+              upstreamSocket.send(msg);
+
+              // メッセージが送信されたのでフラグをtrueにする
+              isMessageSent = true;
+              clearInterval(intervalId);
             }
-          } else {
-            downstreamSocket.close();
-          }
+          }, 50);
+
+          // WebSocketが接続されない場合、もしくは5秒経ってもメッセージが送信されない場合は下流のWebSocketを閉じる
+          setTimeout(() => {
+            if (!isMessageSent) {
+              clearInterval(intervalId);
+              downstreamSocket.close();
+            }
+          }, 5000);
         } else {
           // ブロック対象のメッセージを送ってきたクライアントには警告メッセージを返却
           if (event[0] === "EVENT") {
