@@ -472,7 +472,7 @@ function listen(): void {
               // リトライ回数をカウント
               retryCount++;
             }
-          }, 200);
+          }, 300);
 
           // WebSocketが接続されない場合、もしくは5秒経ってもメッセージが送信されない場合は下流のWebSocketを閉じる
           setTimeout(() => {
