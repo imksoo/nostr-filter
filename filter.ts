@@ -442,6 +442,8 @@ function listen(): void {
         if (shouldRelay) {
           // 送信が成功したかどうかを確認するフラグ
           let isMessageSent = false;
+          // リトライ回数をカウントする変数
+          let retryCount = 0;
 
           // 送信して良いと判断したメッセージは上流のWebSocketに送信
           let intervalId = setInterval(() => {
@@ -454,7 +456,21 @@ function listen(): void {
 
               // メッセージが送信されたのでフラグをtrueにする
               isMessageSent = true;
-              clearInterval(intervalId);
+              if (retryCount > 0) {
+                console.log(
+                  JSON.stringify({
+                    msg: "RETRY SUCCEEDED",
+                    ip,
+                    port,
+                    socketId,
+                    connectionCountForIP,
+                    retryCount,
+                  })
+                );
+              }
+            } else {
+              // リトライ回数をカウント
+              retryCount++;
             }
           }, 50);
 
@@ -463,6 +479,16 @@ function listen(): void {
             if (!isMessageSent) {
               clearInterval(intervalId);
               downstreamSocket.close();
+              console.log(
+                JSON.stringify({
+                  msg: "RETRY TIMEOUT",
+                  ip,
+                  port,
+                  socketId,
+                  connectionCountForIP,
+                  retryCount,
+                })
+              );
             }
           }, 5000);
         } else {
