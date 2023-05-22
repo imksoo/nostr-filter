@@ -410,6 +410,7 @@ function listen(): void {
                 msg = JSON.stringify(event);
               }
               upstreamSocket.send(msg);
+              clearInterval(intervalId);
 
               // メッセージが送信されたのでフラグをtrueにする
               isMessageSent = true;
