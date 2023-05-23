@@ -179,6 +179,16 @@ function listen(): void {
       // ソケットごとにユニークなIDを付与
       const socketId = uuidv4();
 
+      // 上流となるリレーサーバーと接続
+      let upstreamSocket = new WebSocket(upstreamWsUrl);
+      connectUpstream(upstreamSocket, downstreamSocket);
+
+      // クライアントとの接続が確立したら、アイドルタイムアウトを設定
+      setIdleTimeout(downstreamSocket);
+
+      // 接続が確立されるたびにカウントを増やす
+      connectionCount++;
+
       // 接続元のクライアントIPを取得
       const ip =
         (typeof req.headers["cloudfront-viewer-address"] === "string"
@@ -236,6 +246,7 @@ function listen(): void {
             blockedMessage,
           })
         );
+        upstreamSocket.close();
         downstreamSocket.send(blockedMessage);
         downstreamSocket.close(1008, "Forbidden");
         return;
@@ -273,6 +284,7 @@ function listen(): void {
             blockedMessage,
           })
         );
+        upstreamSocket.close();
         downstreamSocket.send(blockedMessage);
         downstreamSocket.close(1008, "Too many requests.");
         return;
@@ -288,16 +300,6 @@ function listen(): void {
         );
         connectionCountsByIP.set(ip, connectionCountForIP);
       }
-
-      // 上流となるリレーサーバーと接続
-      let upstreamSocket = new WebSocket(upstreamWsUrl);
-      connectUpstream(upstreamSocket, downstreamSocket);
-
-      // クライアントとの接続が確立したら、アイドルタイムアウトを設定
-      setIdleTimeout(downstreamSocket);
-
-      // 接続が確立されるたびにカウントを増やす
-      connectionCount++;
 
       // クライアントからメッセージを受信したとき
       downstreamSocket.on("message", async (data: WebSocket.Data) => {
@@ -473,13 +475,16 @@ function listen(): void {
               // リトライ回数をカウント
               retryCount++;
             }
-          }, 300);
+          }, 0.25 * 1000);
 
           // WebSocketが接続されない場合、もしくは5秒経ってもメッセージが送信されない場合は下流のWebSocketを閉じる
           setTimeout(() => {
             if (!isMessageSent) {
               clearInterval(intervalId);
+
+              upstreamSocket.close();
               downstreamSocket.close();
+
               console.log(
                 JSON.stringify({
                   msg: "RETRY TIMEOUT",
@@ -491,7 +496,7 @@ function listen(): void {
                 })
               );
             }
-          }, 5000);
+          }, 30 * 1000);
         } else {
           // ブロック対象のメッセージを送ってきたクライアントには警告メッセージを返却
           if (event[0] === "EVENT") {
