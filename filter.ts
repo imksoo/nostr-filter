@@ -504,7 +504,9 @@ function listen(): void {
           // 送信して良いと判断したメッセージは上流のWebSocketに送信
           if (sendMessage()) {
             let intervalId = setInterval(() => {
-              sendMessage();
+              if (!sendMessage()) {
+                clearInterval(intervalId);
+              }
             }, 0.25 * 1000);
 
             // WebSocketが接続されない場合、もしくは5秒経ってもメッセージが送信されない場合は下流のWebSocketを閉じる
