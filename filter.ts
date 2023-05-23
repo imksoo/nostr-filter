@@ -30,6 +30,7 @@ const contentFilters: RegExp[] = [
   /\$GPT/,
   /Claim your free \$OP/,
   /shop\.55uu\.wang/,
+  /telegram:coderba/,
 ];
 
 // ブロックするユーザーの公開鍵の配列
