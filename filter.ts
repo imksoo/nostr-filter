@@ -442,14 +442,16 @@ function listen(): void {
         }
 
         if (shouldRelay) {
+          // リトライ関数のID
+          let intervalId: NodeJS.Timer;
+
           // 送信が成功したかどうかを確認するフラグ
           let isMessageSent = false;
           let isWebSocketClosed = false;
           // リトライ回数をカウントする変数
           let retryCount = 0;
 
-          // 送信して良いと判断したメッセージは上流のWebSocketに送信
-          let intervalId = setInterval(() => {
+          function sendMessage(): boolean {
             if (upstreamSocket.readyState === WebSocket.OPEN) {
               let msg = message;
               if (isMessageEdited) {
@@ -472,9 +474,11 @@ function listen(): void {
                   })
                 );
               }
+              return false;
             } else if (upstreamSocket.readyState === WebSocket.CONNECTING) {
               // リトライ回数をカウント
               retryCount++;
+              return true;
             } else {
               isWebSocketClosed = true;
 
@@ -493,29 +497,37 @@ function listen(): void {
                   retryCount,
                 })
               );
+              return false;
             }
-          }, 0.25 * 1000);
+          }
 
-          // WebSocketが接続されない場合、もしくは5秒経ってもメッセージが送信されない場合は下流のWebSocketを閉じる
-          setTimeout(() => {
-            if (!isMessageSent && !isWebSocketClosed) {
-              clearInterval(intervalId);
+          // 送信して良いと判断したメッセージは上流のWebSocketに送信
+          if (sendMessage()) {
+            let intervalId = setInterval(() => {
+              sendMessage();
+            }, 0.25 * 1000);
 
-              upstreamSocket.close();
-              downstreamSocket.close();
+            // WebSocketが接続されない場合、もしくは5秒経ってもメッセージが送信されない場合は下流のWebSocketを閉じる
+            setTimeout(() => {
+              if (!isMessageSent && !isWebSocketClosed) {
+                clearInterval(intervalId);
 
-              console.log(
-                JSON.stringify({
-                  msg: "RETRY TIMEOUT",
-                  ip,
-                  port,
-                  socketId,
-                  connectionCountForIP,
-                  retryCount,
-                })
-              );
-            }
-          }, 30 * 1000);
+                upstreamSocket.close();
+                downstreamSocket.close();
+
+                console.log(
+                  JSON.stringify({
+                    msg: "RETRY TIMEOUT",
+                    ip,
+                    port,
+                    socketId,
+                    connectionCountForIP,
+                    retryCount,
+                  })
+                );
+              }
+            }, 30 * 1000);
+          }
         } else {
           // ブロック対象のメッセージを送ってきたクライアントには警告メッセージを返却
           if (event[0] === "EVENT") {
