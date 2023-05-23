@@ -399,9 +399,6 @@ function listen(): void {
         }
 
         if (shouldRelay) {
-          // リトライ関数のID
-          let intervalId: NodeJS.Timer;
-
           // 送信が成功したかどうかを確認するフラグ
           let isMessageSent = false;
           let isWebSocketClosed = false;
@@ -415,7 +412,6 @@ function listen(): void {
                 msg = JSON.stringify(event);
               }
               upstreamSocket.send(msg);
-              clearInterval(intervalId);
 
               // メッセージが送信されたのでフラグをtrueにする
               isMessageSent = true;
@@ -438,8 +434,6 @@ function listen(): void {
               return true;
             } else {
               isWebSocketClosed = true;
-
-              clearInterval(intervalId);
 
               upstreamSocket.close();
               downstreamSocket.close();
@@ -464,7 +458,7 @@ function listen(): void {
               if (!sendMessage()) {
                 clearInterval(intervalId);
               }
-            }, 0.25 * 1000);
+            }, 0.5 * 1000);
 
             // WebSocketが接続されない場合、もしくは5秒経ってもメッセージが送信されない場合は下流のWebSocketを閉じる
             setTimeout(() => {
