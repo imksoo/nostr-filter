@@ -401,6 +401,7 @@ function listen(): void {
         if (shouldRelay) {
           // 送信が成功したかどうかを確認するフラグ
           let isMessageSent = false;
+          let isWebSocketClosed = false;
           // リトライ回数をカウントする変数
           let retryCount = 0;
 
@@ -428,15 +429,33 @@ function listen(): void {
                   })
                 );
               }
-            } else {
+            } else if (upstreamSocket.readyState === WebSocket.CONNECTING) {
               // リトライ回数をカウント
               retryCount++;
+            } else {
+              isWebSocketClosed = true;
+
+              clearInterval(intervalId);
+
+              upstreamSocket.close();
+              downstreamSocket.close();
+
+              console.log(
+                JSON.stringify({
+                  msg: "RETRY DISCONTINUED",
+                  ip,
+                  port,
+                  socketId,
+                  connectionCountForIP,
+                  retryCount,
+                })
+              );
             }
           }, 0.25 * 1000);
 
           // WebSocketが接続されない場合、もしくは5秒経ってもメッセージが送信されない場合は下流のWebSocketを閉じる
           setTimeout(() => {
-            if (!isMessageSent) {
+            if (!isMessageSent && !isWebSocketClosed) {
               clearInterval(intervalId);
 
               upstreamSocket.close();
