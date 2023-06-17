@@ -25,12 +25,14 @@ const contentFilters: RegExp[] = [
   /lnbc/,
   /t\.me/,
   /nostr-vip\.top/,
-  // /running branle/, This word is used in nostr.watch
   /1C-0OTP4DRCWJY17XvOHO/,
   /\$GPT/,
-  /Claim your free \$OP/,
+  /Claim your free/,
   /shop\.55uu\.wang/,
-  /telegram:coderba/i,
+  /dosoos/i,
+  /coderba/i,
+  /人工智能/,
+  /dapp/,
 ];
 
 // ブロックするユーザーの公開鍵の配列
@@ -46,6 +48,7 @@ const cidrRanges: string[] = [
   "157.230.17.234/32",
   "185.25.224.220/32",
   "35.231.153.85/32",
+  "103.135.251.248/32",
 ];
 
 // CIDRマッチ用のフィルタ関数
