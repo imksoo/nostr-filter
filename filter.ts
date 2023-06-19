@@ -36,6 +36,9 @@ const contentFilters: RegExp[] = [
   /coderba/i,
   /人工智能/,
   /dapp/,
+  /motherfuckers/,
+  /shitspaming/,
+  /telegra\.ph/,
 ];
 
 // ブロックするユーザーの公開鍵の配列
