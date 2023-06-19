@@ -13,6 +13,9 @@ const upstreamHttpUrl: string =
 const upstreamWsUrl: string =
   process.env.UPSTREAM_WS_URL ?? "ws://localhost:8080"; // 上流のWebSocketサーバのURL
 
+// 書き込み用の上流リレーとの接続(あらかじめ接続しておいて、WS接続直後のイベントでも取りこぼしを防ぐため)
+let upstreamWriteSocket = new WebSocket(upstreamWsUrl);
+
 console.log(JSON.stringify({ msg: "process.env", ...process.env }));
 console.log(
   JSON.stringify({ msg: "configs", listenPort, upstreamHttpUrl, upstreamWsUrl })
@@ -197,9 +200,9 @@ function listen(): void {
       const ip =
         (typeof req.headers["cloudfront-viewer-address"] === "string"
           ? req.headers["cloudfront-viewer-address"]
-              .split(":")
-              .slice(0, -1)
-              .join(":")
+            .split(":")
+            .slice(0, -1)
+            .join(":")
           : undefined) ||
         (typeof req.headers["x-real-ip"] === "string"
           ? req.headers["x-real-ip"]
@@ -215,8 +218,8 @@ function listen(): void {
       const port =
         (typeof req.headers["cloudfront-viewer-address"] === "string"
           ? parseInt(
-              req.headers["cloudfront-viewer-address"].split(":").slice(-1)[0]
-            )
+            req.headers["cloudfront-viewer-address"].split(":").slice(-1)[0]
+          )
           : undefined) ||
         (typeof req.headers["x-real-port"] === "string"
           ? parseInt(req.headers["x-real-port"])
@@ -388,26 +391,6 @@ function listen(): void {
           if (!event[2].limit || event[2].limit > 500) {
             event[2].limit = 500;
             isMessageEdited = true;
-
-            /* REQのFilterが大きな結果を返しそうなときにNOTICEする <= いったん騒々しすぎるので止める
-            because = "limit must be less than or equal to 500.";
-            const warningMessage = JSON.stringify([
-              "NOTICE",
-              `invalid: REQ ${event[1]} ${because}`,
-            ]);
-            console.log(
-              JSON.stringify({
-                msg: "WARNING NOTICE",
-                ip,
-                port,
-                socketId,
-                connectionCountForIP,
-                warningMessage,
-                event,
-              })
-            );
-            downstreamSocket.send(warningMessage);
-            // */
           }
         } else if (event[0] === "CLOSE") {
           const subscriptionId = event[1];
@@ -453,11 +436,18 @@ function listen(): void {
           let retryCount = 0;
 
           function sendMessage(): boolean {
+            let msg = message;
+            if (isMessageEdited) {
+              msg = JSON.stringify(event);
+            }
+
+            // 書き込んで良いイベントはあらかじめ接続済みのソケットに送信する
+            if (event[0] === "EVENT") {
+              upstreamWriteSocket.send(msg);
+            }
+
+            // REQやEVENTを個別のソケットでやり取りする(OKメッセージの受信のため)
             if (upstreamSocket.readyState === WebSocket.OPEN) {
-              let msg = message;
-              if (isMessageEdited) {
-                msg = JSON.stringify(event);
-              }
               upstreamSocket.send(msg);
 
               // メッセージが送信されたのでフラグをtrueにする
