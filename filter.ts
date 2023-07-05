@@ -2,6 +2,7 @@ import http from "http";
 import WebSocket from "ws";
 import fs from "fs";
 import path from "path";
+import url from "url";
 import * as net from "net";
 import { Mutex } from "async-mutex";
 import { v4 as uuidv4 } from "uuid";
@@ -130,7 +131,8 @@ function listen(): void {
       } else if (req.url && req.headers.accept !== "application/nostr+json") {
         // staticディレクトリ配下の静的ファイルを返却する
         console.log(JSON.stringify({ msg: "HTTP GET", url: req.url }));
-        const filePath = path.join(__dirname, "/static/", req.url);
+	const pathname = url.parse(req.url).pathname || "";
+        const filePath = path.join(__dirname, "/static/", pathname);
         const contentType =
           mime.contentType(path.extname(filePath)) ||
           "application/octet-stream";
@@ -391,7 +393,7 @@ function listen(): void {
             })
           );
 
-          if (!event[2].limit || event[2].limit > 500) {
+          if (event[2].limit && event[2].limit > 500) {
             event[2].limit = 500;
             isMessageEdited = true;
           }

@@ -1,7 +1,7 @@
 version: '3'
 
 services:
-  filter1:
+  filter:
     build: .
     ports:
       - "8081:8081"
@@ -21,29 +21,11 @@ services:
       net.core.somaxconn: 65535
     restart: always
     logging:
-      driver: journald
+      driver: json-file
       options:
-        tag: "{{.Name}}"
-  filter2:
-    build: .
-    ports:
-      - "8082:8081"
-    volumes:
-      - "./static/:/app/static/"
-    env_file:
-      - ./.env
-    sysctls:
-      net.ipv4.ip_local_port_range: "1024 65535"
-      net.ipv4.tcp_tw_reuse: 1
-      net.ipv4.ip_dynaddr: 1
-      net.ipv4.tcp_rfc1337: 1
-      net.ipv4.tcp_fin_timeout: 10
-      net.ipv4.tcp_keepalive_probes: 5
-      net.ipv4.tcp_slow_start_after_idle: 0
-      net.ipv4.tcp_max_syn_backlog: 1024
-      net.core.somaxconn: 65535
-    restart: always
-    logging:
-      driver: journald
-      options:
-        tag: "{{.Name}}"
+        max-file: 4
+        max-size: 256m
+    #logging:
+    #  driver: journald
+    #  options:
+    #    tag: "{{.Name}}"
