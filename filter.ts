@@ -32,6 +32,7 @@ const contentFilters: RegExp[] = [
   /1C-0OTP4DRCWJY17XvOHO/,
   /\$GPT/,
   /Claim your free/,
+  /Claim Free/i,
   /shop\.55uu\.wang/,
   /dosoos/i,
   /coderba/i,
