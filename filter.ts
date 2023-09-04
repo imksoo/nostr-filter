@@ -41,6 +41,7 @@ const contentFilters: RegExp[] = [
   /motherfuckers/,
   /shitspaming/,
   /telegra\.ph/,
+  /幼女爱好/,
 ];
 
 // ブロックするユーザーの公開鍵の配列
