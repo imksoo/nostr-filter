@@ -7,19 +7,26 @@ import * as net from "net";
 import { Mutex } from "async-mutex";
 import { v4 as uuidv4 } from "uuid";
 import * as mime from "mime-types";
+import dotenv from "dotenv";
 
+dotenv.config();
 const listenPort: number = parseInt(process.env.LISTEN_PORT ?? "8081"); // クライアントからのWebSocket待ち受けポート
-const upstreamHttpUrl: string =
-  process.env.UPSTREAM_HTTP_URL ?? "http://localhost:8080"; // 上流のWebSocketサーバのURL
-const upstreamWsUrl: string =
-  process.env.UPSTREAM_WS_URL ?? "ws://localhost:8080"; // 上流のWebSocketサーバのURL
+const upstreamHttpUrl: string = process.env.UPSTREAM_HTTP_URL ??
+  "http://localhost:8080"; // 上流のWebSocketサーバのURL
+const upstreamWsUrl: string = process.env.UPSTREAM_WS_URL ??
+  "ws://localhost:8080"; // 上流のWebSocketサーバのURL
 
 // 書き込み用の上流リレーとの接続(あらかじめ接続しておいて、WS接続直後のイベントでも取りこぼしを防ぐため)
 let upstreamWriteSocket = new WebSocket(upstreamWsUrl);
 
 console.log(JSON.stringify({ msg: "process.env", ...process.env }));
 console.log(
-  JSON.stringify({ msg: "configs", listenPort, upstreamHttpUrl, upstreamWsUrl })
+  JSON.stringify({
+    msg: "configs",
+    listenPort,
+    upstreamHttpUrl,
+    upstreamWsUrl,
+  }),
 );
 
 // NostrのEvent contentsのフィルタリング用正規表現パターンの配列
@@ -46,6 +53,11 @@ const contentFilters: RegExp[] = [
 
 // ブロックするユーザーの公開鍵の配列
 const blockedPubkeys: string[] = [];
+// Allow only whitelisted pubkey to write events
+const whitelistedPubkeys: string[] =
+  (typeof process.env.WHITELISTED_PUBKEYS !== "undefined")
+    ? process.env.WHITELISTED_PUBKEYS.split(",").map((pubkey) => pubkey.trim())
+    : [];
 
 // クライアントIPアドレスのCIDRフィルタ
 const cidrRanges: string[] = [
@@ -79,8 +91,9 @@ function ipMatchesCidr(ip: string, cidr: string): boolean {
     const rangeNum = BigInt(`0x${range.replace(/:/g, "")}`);
     const mask6 = BigInt(
       `0x${"f".repeat(32 - parseInt(bits, 10))}${"0".repeat(
-        parseInt(bits, 10)
-      )}`
+        parseInt(bits, 10),
+      )
+      }`,
     );
 
     return (ipNum & mask6) === (rangeNum & mask6);
@@ -110,7 +123,7 @@ function loggingMemoryUsage(): void {
       totalHeapSize,
       rssSize,
       connectionCount,
-    })
+    }),
   );
 }
 
@@ -133,15 +146,14 @@ function listen(): void {
       } else if (req.url && req.headers.accept !== "application/nostr+json") {
         // staticディレクトリ配下の静的ファイルを返却する
         console.log(JSON.stringify({ msg: "HTTP GET", url: req.url }));
-	const pathname = url.parse(req.url).pathname || "";
+        const pathname = url.parse(req.url).pathname || "";
         const filePath = path.join(__dirname, "/static/", pathname);
-        const contentType =
-          mime.contentType(path.extname(filePath)) ||
+        const contentType = mime.contentType(path.extname(filePath)) ||
           "application/octet-stream";
         fs.readFile(filePath, (err, data) => {
           if (err) {
             console.log(
-              JSON.stringify({ msg: "HTTP RESOURCE NOT FOUND", url: req.url })
+              JSON.stringify({ msg: "HTTP RESOURCE NOT FOUND", url: req.url }),
             );
             res.writeHead(200, { "Content-Type": "text/html" });
             res.end("Please use a Nostr client to connect...\n");
@@ -152,7 +164,7 @@ function listen(): void {
                 url: req.url,
                 contentType,
                 length: data.length,
-              })
+              }),
             );
             res.writeHead(200, { "Content-Type": contentType });
             res.end(data);
@@ -171,11 +183,11 @@ function listen(): void {
           (proxyRes) => {
             res.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers);
             proxyRes.pipe(res);
-          }
+          },
         );
         req.pipe(proxyReq);
       }
-    }
+    },
   );
   // WebSocketサーバーの構成
   const wss = new WebSocket.Server({ server });
@@ -225,7 +237,7 @@ function listen(): void {
       const port =
         (typeof req.headers["cloudfront-viewer-address"] === "string"
           ? parseInt(
-            req.headers["cloudfront-viewer-address"].split(":").slice(-1)[0]
+            req.headers["cloudfront-viewer-address"].split(":").slice(-1)[0],
           )
           : undefined) ||
         (typeof req.headers["x-real-port"] === "string"
@@ -244,7 +256,7 @@ function listen(): void {
             ip,
             port,
             socketId,
-          })
+          }),
         );
         const blockedMessage = JSON.stringify([
           "NOTICE",
@@ -258,7 +270,7 @@ function listen(): void {
             socketId,
             because,
             blockedMessage,
-          })
+          }),
         );
         upstreamSocket.close();
         downstreamSocket.send(blockedMessage);
@@ -281,7 +293,7 @@ function listen(): void {
             port,
             socketId,
             connectionCountForIP,
-          })
+          }),
         );
         const blockedMessage = JSON.stringify([
           "NOTICE",
@@ -296,7 +308,7 @@ function listen(): void {
             connectionCountForIP,
             because,
             blockedMessage,
-          })
+          }),
         );
         upstreamSocket.close();
         downstreamSocket.send(blockedMessage);
@@ -310,7 +322,7 @@ function listen(): void {
             port,
             socketId,
             connectionCountForIP,
-          })
+          }),
         );
         connectionCountsByIP.set(ip, connectionCountForIP);
       }
@@ -352,6 +364,19 @@ function listen(): void {
               }
             }
           }
+
+          // Allow write any event only for whitelisted pubkeys in downstream messages
+          for (const allowed of whitelistedPubkeys) {
+            if (event[1].pubkey !== allowed) {
+              shouldRelay = false;
+              because = "Only whitelisted pubkey can write events";
+              // break;
+            } else {
+              shouldRelay = true;
+              because = "";
+            }
+          }
+
           // イベント内容とフィルターの判定結果をコンソールにログ出力
           if (shouldRelay) {
             console.log(
@@ -362,7 +387,7 @@ function listen(): void {
                 socketId,
                 connectionCountForIP,
                 event: event[1],
-              })
+              }),
             );
           } else {
             console.log(
@@ -374,7 +399,7 @@ function listen(): void {
                 socketId,
                 connectionCountForIP,
                 event: event[1],
-              })
+              }),
             );
           }
         } else if (event[0] === "REQ") {
@@ -392,7 +417,7 @@ function listen(): void {
               connectionCountForIP,
               subscriptionId,
               req: event[2],
-            })
+            }),
           );
 
           if (event[2].limit && event[2].limit > 500) {
@@ -404,7 +429,7 @@ function listen(): void {
           const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
           subscriptionIdAndIPAddress.set(
             socketAndSubscriptionId,
-            ip + " CLOSED"
+            ip + " CLOSED",
           );
           subscriptionIdAndPortNumber.set(socketAndSubscriptionId, -port);
           // REQイベントの内容をコンソールにログ出力
@@ -418,9 +443,9 @@ function listen(): void {
               subscriptionId,
               req: event[2],
               subscriptionSize: transferredSizePerSubscriptionId.get(
-                socketAndSubscriptionId
+                socketAndSubscriptionId,
               ),
-            })
+            }),
           );
         } else {
           console.log(
@@ -431,7 +456,7 @@ function listen(): void {
               socketId,
               connectionCountForIP,
               message: event,
-            })
+            }),
           );
         }
 
@@ -468,7 +493,7 @@ function listen(): void {
                     socketId,
                     connectionCountForIP,
                     retryCount,
-                  })
+                  }),
                 );
               }
               return false;
@@ -490,7 +515,7 @@ function listen(): void {
                   socketId,
                   connectionCountForIP,
                   retryCount,
-                })
+                }),
               );
               return false;
             }
@@ -520,7 +545,7 @@ function listen(): void {
                     socketId,
                     connectionCountForIP,
                     retryCount,
-                  })
+                  }),
                 );
               }
             }, 30 * 1000);
@@ -543,7 +568,7 @@ function listen(): void {
                 connectionCountForIP,
                 blockedMessage,
                 event,
-              })
+              }),
             );
             downstreamSocket.send(blockedMessage);
           } else {
@@ -560,7 +585,7 @@ function listen(): void {
                 connectionCountForIP,
                 blockedMessage,
                 event,
-              })
+              }),
             );
             downstreamSocket.send(blockedMessage);
           }
@@ -583,7 +608,7 @@ function listen(): void {
             port,
             socketId,
             connectionCountForIP,
-          })
+          }),
         );
         upstreamSocket.close();
         clearIdleTimeout(downstreamSocket);
@@ -598,7 +623,7 @@ function listen(): void {
             socketId,
             connectionCountForIP,
             error,
-          })
+          }),
         );
         downstreamSocket.close();
         upstreamSocket.close();
@@ -607,14 +632,14 @@ function listen(): void {
       // 上流のリレーサーバーとの接続
       function connectUpstream(
         upstreamSocket: WebSocket,
-        downstreamSocket: WebSocket
+        downstreamSocket: WebSocket,
       ): void {
         upstreamSocket.on("open", async () => {
           console.log(
             JSON.stringify({
               msg: "UPSTREAM CONNECTED",
               socketId,
-            })
+            }),
           );
           setIdleTimeout(upstreamSocket);
         });
@@ -624,7 +649,7 @@ function listen(): void {
             JSON.stringify({
               msg: "UPSTREAM DISCONNECTED",
               socketId,
-            })
+            }),
           );
           downstreamSocket.close();
           clearIdleTimeout(upstreamSocket);
@@ -636,7 +661,7 @@ function listen(): void {
               msg: "UPSTREAM ERROR",
               socketId,
               error,
-            })
+            }),
           );
           downstreamSocket.close();
           upstreamSocket.close();
@@ -679,7 +704,7 @@ function listen(): void {
                 resultType,
                 socketId,
                 eventId: result[1],
-              })
+              }),
             );
           } else if (resultType === "NOTICE") {
             console.log(
@@ -690,20 +715,19 @@ function listen(): void {
                 resultType,
                 socketId,
                 message: result,
-              })
+              }),
             );
           } else {
             const subscriptionId = result[1];
             const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
             let subscriptionSize;
             await subscriptionSizeMutex.runExclusive(async () => {
-              subscriptionSize =
-                (transferredSizePerSubscriptionId.get(
-                  socketAndSubscriptionId
-                ) ?? 0) + message.length;
+              subscriptionSize = (transferredSizePerSubscriptionId.get(
+                socketAndSubscriptionId,
+              ) ?? 0) + message.length;
               transferredSizePerSubscriptionId.set(
                 socketAndSubscriptionId,
-                subscriptionSize
+                subscriptionSize,
               );
             });
             console.log(
@@ -715,7 +739,7 @@ function listen(): void {
                 socketId,
                 subscriptionId,
                 subscriptionSize,
-              })
+              }),
             );
           }
           if (shouldRelay) {
@@ -729,12 +753,12 @@ function listen(): void {
                 port,
                 socketId,
                 event,
-              })
+              }),
             );
           }
         });
       }
-    }
+    },
   );
   // HTTP+WebSocketサーバーの起動
   server.listen(listenPort);
@@ -753,7 +777,7 @@ const defaultTimeoutValue = 10 * 60 * 1000;
 
 function setIdleTimeout(
   socket: WebSocket,
-  timeout: number = defaultTimeoutValue
+  timeout: number = defaultTimeoutValue,
 ): void {
   const timeoutId = setTimeout(() => {
     socket.close();
@@ -765,7 +789,7 @@ function setIdleTimeout(
 
 function resetIdleTimeout(
   socket: WebSocket,
-  defaultTimeout: number = defaultTimeoutValue
+  defaultTimeout: number = defaultTimeoutValue,
 ): void {
   clearTimeout(idleTimeouts.get(socket));
   const timeout = timeoutValues.get(socket) ?? defaultTimeout;
