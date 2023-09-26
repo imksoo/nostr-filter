@@ -21,10 +21,10 @@ if (NODE_ENV === "production") {
   };
 }
 const listenPort: number = parseInt(process.env.LISTEN_PORT ?? "8081"); // クライアントからのWebSocket待ち受けポート
-const upstreamHttpUrl: string = process.env.UPSTREAM_HTTP_URL ??
-  "http://localhost:8080"; // 上流のWebSocketサーバのURL
-const upstreamWsUrl: string = process.env.UPSTREAM_WS_URL ??
-  "ws://localhost:8080"; // 上流のWebSocketサーバのURL
+const upstreamHttpUrl: string =
+  process.env.UPSTREAM_HTTP_URL ?? "http://localhost:8080"; // 上流のWebSocketサーバのURL
+const upstreamWsUrl: string =
+  process.env.UPSTREAM_WS_URL ?? "ws://localhost:8080"; // 上流のWebSocketサーバのURL
 
 // 書き込み用の上流リレーとの接続(あらかじめ接続しておいて、WS接続直後のイベントでも取りこぼしを防ぐため)
 let upstreamWriteSocket = new WebSocket(upstreamWsUrl);
@@ -83,9 +83,10 @@ function ipMatchesCidr(ip: string, cidr: string): boolean {
     const ipNum = BigInt(`0x${ip.replace(/:/g, "")}`);
     const rangeNum = BigInt(`0x${range.replace(/:/g, "")}`);
     const mask6 = BigInt(
-      `0x${"f".repeat(32 - parseInt(bits, 10))}${"0".repeat(
-        parseInt(bits, 10),
-      )
+      `0x${"f".repeat(32 - parseInt(bits, 10))}${
+        "0".repeat(
+          parseInt(bits, 10),
+        )
       }`,
     );
 
