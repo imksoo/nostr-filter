@@ -322,6 +322,7 @@ function listen(): void {
             port,
             socketId,
             connectionCountForIP,
+            headers: req.headers
           }),
         );
         connectionCountsByIP.set(ip, connectionCountForIP);
