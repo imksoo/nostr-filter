@@ -55,9 +55,11 @@ const contentFilters: RegExp[] = [
 const blockedPubkeys: string[] = [];
 // Allow only whitelisted pubkey to write events
 const whitelistedPubkeys: string[] =
-  (typeof process.env.WHITELISTED_PUBKEYS !== "undefined")
+  (typeof process.env.WHITELISTED_PUBKEYS !== "undefined" && process.env.WHITELISTED_PUBKEYS !== "")
     ? process.env.WHITELISTED_PUBKEYS.split(",").map((pubkey) => pubkey.trim())
     : [];
+// Filter proxy events
+const filterProxyEvents = (process.env.FILTER_PROXY_EVENTS === "true")
 
 // クライアントIPアドレスのCIDRフィルタ
 const cidrRanges: string[] = [
@@ -362,6 +364,17 @@ function listen(): void {
                 shouldRelay = false;
                 because = "Blocked event by pubkey";
                 break;
+              }
+            }
+
+            // Proxyイベントをフィルターする
+            if (filterProxyEvents) {
+              for (const tag of event[1].tags) {
+                if (tag[0] === "proxy") {
+                  shouldRelay = false;
+                  because = "Blocked event by proxied event";
+                  break;
+                }
               }
             }
           }
