@@ -8,6 +8,30 @@ import { Mutex } from "async-mutex";
 import { v4 as uuidv4 } from "uuid";
 import * as mime from "mime-types";
 import dotenv from "dotenv";
+import "websocket-polyfill";
+import {
+  generatePrivateKey,
+  getEventHash,
+  getPublicKey,
+  getSignature,
+  nip44,
+  SimplePool,
+  SubscriptionOptions,
+  validateEvent,
+  verifySignature,
+} from "nostr-tools";
+import { eventKind, NostrEventExt, NostrFetcher } from "nostr-fetch";
+import { simplePoolAdapter } from "@nostr-fetch/adapter-nostr-tools";
+import pLimit from "p-limit";
+import { LRUCache } from "lru-cache";
+import { exit } from "process";
+import { setInterval } from "timers";
+import {
+  extractHashtags,
+  hasContentWarning,
+  hasNsfwHashtag,
+  isActivityPubUser,
+} from "./nostr-util";
 
 dotenv.config();
 
@@ -16,6 +40,24 @@ const upstreamHttpUrl: string =
   process.env.UPSTREAM_HTTP_URL ?? "http://localhost:8080"; // 上流のWebSocketサーバのURL
 const upstreamWsUrl: string =
   process.env.UPSTREAM_WS_URL ?? "ws://localhost:8080"; // 上流のWebSocketサーバのURL
+const NOSTR_MONITORING_BOT_PUBLIC_KEY: string =
+  process.env.NOSTR_MONITORING_BOT_PUBLIC_KEY ?? "";
+const CLASSIFICATION_EVENT_KIND = 9978;
+
+const pool = new SimplePool();
+// const fetcher = NostrFetcher.init();
+const fetcher = NostrFetcher.withCustomPool(simplePoolAdapter(pool));
+const requestLimiter = pLimit(20);
+const nHoursAgoInUnixTime = (hrs: number): number =>
+  Math.floor((Date.now() - hrs * 60 * 60 * 1000) / 1000);
+
+const cache = new LRUCache(
+  {
+    max: 100000,
+    // how long to live in ms
+    ttl: 24 * 60 * 60 * 1000,
+  },
+);
 
 // 書き込み用の上流リレーとの接続(あらかじめ接続しておいて、WS接続直後のイベントでも取りこぼしを防ぐため)
 let upstreamWriteSocket = new WebSocket(upstreamWsUrl);
@@ -139,7 +181,112 @@ setInterval(() => {
   loggingMemoryUsage();
 }, 1 * 60 * 1000); // ヒープ状態を1分ごとに実行
 
-function listen(): void {
+let relayPool;
+
+async function regularEventFetcherWarmup() {
+  let subRegularEventFetcher = pool.sub(
+    [upstreamWsUrl],
+    [
+      {
+        kinds: [eventKind.text],
+        limit: 500,
+      },
+    ],
+    {
+      id: "regularEventFetcher-1",
+    },
+  );
+
+  subRegularEventFetcher.on("eose", () => {
+    subRegularEventFetcher.unsub();
+    // subNsfwClassificationDataEose = true;
+  });
+  subRegularEventFetcher.on("event", (event) => {
+    // Only process after eose event
+    // return
+  });
+}
+
+async function fetchSubscribeClassificationDataHistory(
+  hoursAgoToCheck: number = 24,
+) {
+  const classificationData = await fetcher.fetchAllEvents(
+    [upstreamWsUrl],
+    /* filter */
+    {
+      kinds: [CLASSIFICATION_EVENT_KIND],
+      "authors": [NOSTR_MONITORING_BOT_PUBLIC_KEY],
+      "#d": ["nostr-nsfw-classification"],
+      // "#e": subEventsId,
+    },
+    /* time range filter */
+    {
+      since: nHoursAgoInUnixTime(hoursAgoToCheck),
+      until: nHoursAgoInUnixTime(0),
+    },
+    /* fetch options (optional) */
+    { sort: false, skipVerification: true },
+  ) ?? [];
+
+  for (const classification of classificationData) {
+    const eventTag = classification.tags.filter((tag) => tag[0] === "e");
+    if (eventTag.length === 0) continue;
+    const eventId = eventTag[0][1];
+    if (cache.has(eventId)) continue;
+    cache.set(eventId, JSON.parse(classification.content));
+  }
+
+  console.log(classificationData[0]);
+  console.log(classificationData[classificationData.length - 1]);
+  console.log(classificationData.length);
+
+  let subNsfwClassificationData = pool.sub(
+    [upstreamWsUrl],
+    [
+      {
+        kinds: [CLASSIFICATION_EVENT_KIND],
+        "authors": [NOSTR_MONITORING_BOT_PUBLIC_KEY],
+        "#d": ["nostr-nsfw-classification"],
+      },
+    ],
+    {
+      id: "subNsfwClassification",
+    },
+  );
+  let subNsfwClassificationDataEose = false;
+
+  subNsfwClassificationData.on("eose", () => {
+    // sub.unsub()
+    subNsfwClassificationDataEose = true;
+  });
+  subNsfwClassificationData.on("event", (event) => {
+    // Only process after eose event
+    // if (!subNsfwClassificationDataEose) return;
+    if (event) {
+      try {
+        if (!cache.has(event.id)) {
+          const nsfwClassificationData = JSON.parse(
+            event.content,
+          );
+          cache.set(event.id, nsfwClassificationData);
+        }
+      } catch (error) {
+        console.error(error);
+      }
+    }
+  });
+}
+
+async function listen(): Promise<void> {
+  const hoursAgoToCheck = 24 * 1;
+
+  // throw new Error("stop");
+  // exit();
+  await fetchSubscribeClassificationDataHistory(hoursAgoToCheck);
+
+  // Regular event fetcher warmup
+  setInterval(() => regularEventFetcherWarmup, 60 * 1000);
+
   console.log(JSON.stringify({ msg: "Started", listenPort }));
 
   // HTTPサーバーの構成
@@ -221,6 +368,9 @@ function listen(): void {
 
       // 接続が確立されるたびにカウントを増やす
       connectionCount++;
+
+      const reqUrl = new URL(req.url ?? "/", `http://${req.headers["host"]}`);
+      const searchParams = reqUrl.searchParams;
 
       // 接続元のクライアントIPを取得
       const ip =
@@ -439,8 +589,8 @@ function listen(): void {
             }),
           );
 
-          if (event[2].limit && event[2].limit > 500) {
-            event[2].limit = 500;
+          if (event[2].limit && event[2].limit > 2000) {
+            event[2].limit = 2000;
             isMessageEdited = true;
           }
         } else if (event[0] === "CLOSE") {
@@ -710,6 +860,118 @@ function listen(): void {
                 because = "Blocked event by pubkey";
                 break;
               }
+            }
+
+            const eventId = event[2].id;
+
+            // My Classification Filter
+            let cachedClassification;
+            if (cache.has(eventId)) {
+              cachedClassification = cache.get(eventId);
+            } else {
+              // Fetch classification data
+              // const classificationRawData = await fetcher.fetchLastEvent(
+              //   [upstreamWsUrl],
+              //   /* filter */
+              //   {
+              //     kinds: [CLASSIFICATION_EVENT_KIND],
+              //     "authors": [NOSTR_MONITORING_BOT_PUBLIC_KEY],
+              //     "#e": [eventId],
+              //     "#d": ["nostr-nsfw-classification"],
+              //   },
+              // );
+
+              // if (classificationRawData) {
+              //   cachedClassification = JSON.parse(
+              //     classificationRawData.content,
+              //   );
+              //   cache.set(eventId, cachedClassification);
+              // }
+            }
+
+            let isNsfw = false;
+            let filterContentMode = searchParams.get("content") ?? "sfw";
+            let validFilterContentMode = ["all", "sfw", "nsfw"];
+            let nsfwConfidenceThresold = parseInt(
+              searchParams.get("nsfw_confidence") ?? "75",
+            );
+            nsfwConfidenceThresold = Number.isNaN(nsfwConfidenceThresold) ||
+                nsfwConfidenceThresold < 0 || nsfwConfidenceThresold > 100
+              ? 75 / 100
+              : nsfwConfidenceThresold / 100;
+            let filterUserMode = searchParams.get("user") ?? "all";
+            let validFilterUserMode = ["all", "nostr", "activitypub"];
+            const contentWarningExist = hasContentWarning(event[2].tags ?? []);
+            const nsfwHashtagExist = hasNsfwHashtag(
+              extractHashtags(event[2].tags ?? []),
+            );
+
+            // Check classification results
+            if (cachedClassification) {
+              const nsfwRulesFilter = function (
+                classifications: any,
+                nsfwConfidenceThresold: number = 0.75,
+              ): boolean {
+                // Doesn't have classifications data since it doesn't have image url
+                if (!classifications) return false;
+
+                // Check if any image url classification is nsfw
+                let result = false;
+                for (const classification of classifications) {
+                  const nsfw_probabilty = 1 -
+                    parseFloat(classification.data.neutral);
+                  if (nsfw_probabilty >= nsfwConfidenceThresold) {
+                    result = true;
+                    break;
+                  }
+                }
+                return result;
+              };
+
+              isNsfw = nsfwRulesFilter(
+                cachedClassification,
+                nsfwConfidenceThresold,
+              );
+            }
+
+            const isSensitiveContent = isNsfw || contentWarningExist ||
+              nsfwHashtagExist;
+            switch (filterContentMode) {
+              case "sfw":
+                shouldRelay = !isSensitiveContent;
+                if (!shouldRelay) because = "Non-NSFW only filtered";
+                break;
+              case "nsfw":
+                shouldRelay = isSensitiveContent;
+                if (!shouldRelay) because = "NSFW only filtered";
+                break;
+              default:
+                shouldRelay = true;
+                because = "";
+                break;
+            }
+
+            // console.log("isSensitiveContent", isSensitiveContent);
+
+            let activityPubUser = isActivityPubUser(event[2].tags ?? []);
+
+            // console.log("activityPubUser", activityPubUser);
+            switch (filterUserMode) {
+              case "nostr":
+                if (!shouldRelay) break;
+                shouldRelay = !activityPubUser;
+                if (!shouldRelay) because = "Nostr native user only filtered";
+                break;
+              case "activitypub":
+                if (!shouldRelay) break;
+                shouldRelay = activityPubUser;
+                if (!shouldRelay) because = "activitypub user only filtered";
+                break;
+              default:
+                if (!shouldRelay) break;
+                shouldRelay = true;
+                because = "";
+                break;
             }
           }
           const result = JSON.parse(message);
