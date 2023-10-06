@@ -52,7 +52,10 @@ const contentFilters: RegExp[] = [
 ];
 
 // ブロックするユーザーの公開鍵の配列
-const blockedPubkeys: string[] = [];
+const blockedPubkeys: string[] =
+  (typeof process.env.BLOCKED_PUBKEYS !== "undefined"  && process.env.BLOCKED_PUBKEYS !== "")
+    ? process.env.BLOCKED_PUBKEYS.split(",").map((pubkey) => pubkey.trim())
+    : [];
 // Allow only whitelisted pubkey to write events
 const whitelistedPubkeys: string[] =
   (typeof process.env.WHITELISTED_PUBKEYS !== "undefined" &&
