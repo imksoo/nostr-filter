@@ -96,16 +96,18 @@ const contentFilters: RegExp[] = [
 
 // ブロックするユーザーの公開鍵の配列
 const blockedPubkeys: string[] =
-  (typeof process.env.BLOCKED_PUBKEYS !== "undefined")
+  (typeof process.env.BLOCKED_PUBKEYS !== "undefined" &&
+    process.env.BLOCKED_PUBKEYS !== "")
     ? process.env.BLOCKED_PUBKEYS.split(",").map((pubkey) => pubkey.trim())
     : [];
 // Allow only whitelisted pubkey to write events
 const whitelistedPubkeys: string[] =
-  (typeof process.env.WHITELISTED_PUBKEYS !== "undefined" && process.env.WHITELISTED_PUBKEYS !== "")
+  (typeof process.env.WHITELISTED_PUBKEYS !== "undefined" &&
+    process.env.WHITELISTED_PUBKEYS !== "")
     ? process.env.WHITELISTED_PUBKEYS.split(",").map((pubkey) => pubkey.trim())
     : [];
 // Filter proxy events
-const filterProxyEvents = (process.env.FILTER_PROXY_EVENTS === "true")
+const filterProxyEvents = process.env.FILTER_PROXY_EVENTS === "true";
 
 // クライアントIPアドレスのCIDRフィルタ
 const cidrRanges: string[] = [
@@ -138,10 +140,9 @@ function ipMatchesCidr(ip: string, cidr: string): boolean {
     const ipNum = BigInt(`0x${ip.replace(/:/g, "")}`);
     const rangeNum = BigInt(`0x${range.replace(/:/g, "")}`);
     const mask6 = BigInt(
-      `0x${"f".repeat(32 - parseInt(bits, 10))}${
-        "0".repeat(
-          parseInt(bits, 10),
-        )
+      `0x${"f".repeat(32 - parseInt(bits, 10))}${"0".repeat(
+        parseInt(bits, 10),
+      )
       }`,
     );
 
@@ -479,7 +480,7 @@ async function listen(): Promise<void> {
             port,
             socketId,
             connectionCountForIP,
-            headers: req.headers
+            headers: req.headers,
           }),
         );
         connectionCountsByIP.set(ip, connectionCountForIP);
@@ -492,7 +493,12 @@ async function listen(): Promise<void> {
         resetIdleTimeout(upstreamSocket);
 
         const message = data.toString();
-        const event = JSON.parse(message);
+        let event: any[];
+        try {
+          event = JSON.parse(message);
+        } catch (err: any) {
+          event = ["INVALID", err.message ?? JSON.stringify(err)];
+        }
 
         let shouldRelay = true;
         let because = "";
@@ -627,6 +633,11 @@ async function listen(): Promise<void> {
               message: event,
             }),
           );
+
+          if (event[0] === "INVALID") {
+            shouldRelay = false;
+            because = event[1];
+          }
         }
 
         if (shouldRelay) {
@@ -838,7 +849,12 @@ async function listen(): Promise<void> {
 
         upstreamSocket.on("message", async (data: WebSocket.Data) => {
           const message = data.toString();
-          const event = JSON.parse(message);
+          let event: any[];
+          try {
+            event = JSON.parse(message);
+          } catch (err: any) {
+            event = ["INVALID", err.message ?? JSON.stringify(err)];
+          }
           resetIdleTimeout(downstreamSocket);
           resetIdleTimeout(upstreamSocket);
 
@@ -896,7 +912,7 @@ async function listen(): Promise<void> {
               searchParams.get("nsfw_confidence") ?? "75",
             );
             nsfwConfidenceThresold = Number.isNaN(nsfwConfidenceThresold) ||
-                nsfwConfidenceThresold < 0 || nsfwConfidenceThresold > 100
+              nsfwConfidenceThresold < 0 || nsfwConfidenceThresold > 100
               ? 75 / 100
               : nsfwConfidenceThresold / 100;
             let filterUserMode = searchParams.get("user") ?? "all";
@@ -973,8 +989,17 @@ async function listen(): Promise<void> {
                 because = "";
                 break;
             }
+          } else if (event[0] === "INVALID") {
+            shouldRelay = false;
+            because = event[1];
           }
-          const result = JSON.parse(message);
+
+          let result: any[];
+          try {
+            result = JSON.parse(message);
+          } catch (err: any) {
+            result = ["INVALID", err.message ?? JSON.stringify(err)];
+          }
           const resultType = result[0];
           if (resultType === "OK") {
             console.log(
@@ -998,6 +1023,9 @@ async function listen(): Promise<void> {
                 message: result,
               }),
             );
+          } else if (resultType === "INVALID") {
+            shouldRelay = false;
+            because = result[1];
           } else {
             const subscriptionId = result[1];
             const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
