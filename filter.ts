@@ -382,9 +382,34 @@ async function listen(): Promise<void> {
   subscribeClassificationDataHistory();
 
   const sinceHoursAgoToCheck = 24 * 1;
-  const untilHoursAgoToCheck = 0;
+  const untilHoursAgoToCheck = 4;
   const fetchStartTime = performance.now();
-  await fetchClassificationDataHistory(sinceHoursAgoToCheck, untilHoursAgoToCheck);
+  // Fetch short time range data as initial data (fast response)
+  await fetchClassificationDataHistory(untilHoursAgoToCheck, 0);
+  console.info("ClassificationCache after initial data");
+  console.info("nsfwClassificationCache.size", nsfwClassificationCache.size);
+  console.info("languageClassificationCache.size", languageClassificationCache.size);
+  console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size);
+
+  // Fetch longer time range data in the background (maximum for 3 days)
+  (async () => {
+    await fetchClassificationDataHistory(sinceHoursAgoToCheck, untilHoursAgoToCheck);
+    console.info("ClassificationCache after fetching", sinceHoursAgoToCheck, untilHoursAgoToCheck);
+    console.info("nsfwClassificationCache.size", nsfwClassificationCache.size);
+    console.info("languageClassificationCache.size", languageClassificationCache.size);
+    console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size);
+    await fetchClassificationDataHistory(sinceHoursAgoToCheck * 2, sinceHoursAgoToCheck);
+    console.info("ClassificationCache after fetching", sinceHoursAgoToCheck * 2, sinceHoursAgoToCheck);
+    console.info("nsfwClassificationCache.size", nsfwClassificationCache.size);
+    console.info("languageClassificationCache.size", languageClassificationCache.size);
+    console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size);
+    await fetchClassificationDataHistory(sinceHoursAgoToCheck * 3, sinceHoursAgoToCheck * 2);
+    console.info("ClassificationCache after fetching", sinceHoursAgoToCheck * 3, sinceHoursAgoToCheck * 2);
+    console.info("nsfwClassificationCache.size", nsfwClassificationCache.size);
+    console.info("languageClassificationCache.size", languageClassificationCache.size);
+    console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size);
+  })();
+
   const fetchEndTime = performance.now();
   console.info("fetchClassificationDataHistory elapsed time: ", fetchEndTime - fetchStartTime);
 
