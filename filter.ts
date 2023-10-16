@@ -34,6 +34,16 @@ import {
 } from "./nostr-util";
 
 dotenv.config();
+const NODE_ENV = process.env.NODE_ENV || "production";
+if (NODE_ENV === "production") {
+  // Suppress log and debug messages from console. console.info, console.warn, and console.error are still available in production mode
+  console.log = (...data) => {
+
+  };
+  console.debug = (...data) => {
+  
+  };
+}
 
 const listenPort: number = parseInt(process.env.LISTEN_PORT ?? "8081"); // クライアントからのWebSocket待ち受けポート
 const upstreamHttpUrl: string =
@@ -72,8 +82,8 @@ const languageClassificationCache = new LRUCache(
 // 書き込み用の上流リレーとの接続(あらかじめ接続しておいて、WS接続直後のイベントでも取りこぼしを防ぐため)
 let upstreamWriteSocket = new WebSocket(upstreamWsUrl);
 
-console.log(JSON.stringify({ msg: "process.env", ...process.env }));
-console.log(
+console.info(JSON.stringify({ msg: "process.env", ...process.env }));
+console.info(
   JSON.stringify({
     msg: "configs",
     listenPort,
@@ -175,7 +185,7 @@ function loggingMemoryUsage(): void {
   const usedHeapSize = Math.round(memoryUsage.heapUsed / 1024 / 1024);
   const totalHeapSize = Math.round(memoryUsage.heapTotal / 1024 / 1024);
   const rssSize = Math.round(memoryUsage.rss / 1024 / 1024);
-  console.log(
+  console.info(
     JSON.stringify({
       msg: "memoryUsage",
       currentTime,
@@ -380,7 +390,7 @@ async function listen(): Promise<void> {
   // Regular event fetcher warmup
   setInterval(() => regularEventFetcherWarmup, 60 * 1000);
 
-  console.log(JSON.stringify({ msg: "Started", listenPort }));
+  console.info(JSON.stringify({ msg: "Started", listenPort }));
 
   // HTTPサーバーの構成
   const server = http.createServer(
@@ -399,7 +409,7 @@ async function listen(): Promise<void> {
           "application/octet-stream";
         fs.readFile(filePath, (err, data) => {
           if (err) {
-            console.log(
+            console.warn(
               JSON.stringify({ msg: "HTTP RESOURCE NOT FOUND", url: req.url }),
             );
             res.writeHead(200, { "Content-Type": "text/html" });
@@ -499,7 +509,7 @@ async function listen(): Promise<void> {
       if (isIpBlocked) {
         const because = "Blocked by CIDR filter";
         // IPアドレスがCIDR範囲内にある場合、接続を拒否
-        console.log(
+        console.warn(
           JSON.stringify({
             msg: "CONNECTING BLOCKED",
             because,
@@ -535,7 +545,7 @@ async function listen(): Promise<void> {
       });
       if (connectionCountForIP > 100) {
         const because = "Blocked by too many connections";
-        console.log(
+        console.warn(
           JSON.stringify({
             msg: "CONNECTING BLOCKED",
             because,
@@ -565,7 +575,7 @@ async function listen(): Promise<void> {
         downstreamSocket.close(1008, "Too many requests.");
         return;
       } else {
-        console.log(
+        console.info(
           JSON.stringify({
             msg: "CONNECTED",
             ip,
@@ -887,7 +897,7 @@ async function listen(): Promise<void> {
       });
 
       downstreamSocket.on("error", async (error: Error) => {
-        console.log(
+        console.warn(
           JSON.stringify({
             msg: "DOWNSTREAM ERROR",
             ip,
@@ -928,7 +938,7 @@ async function listen(): Promise<void> {
         });
 
         upstreamSocket.on("error", async (error: Error) => {
-          console.log(
+          console.warn(
             JSON.stringify({
               msg: "UPSTREAM ERROR",
               socketId,
