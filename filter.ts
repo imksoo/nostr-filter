@@ -292,7 +292,7 @@ const allClassificationDataFetcher = async (sinceHoursAgoToCheck: number = 24, u
   });
 };
 
-async function fetchSubscribeClassificationDataHistory(
+async function fetchClassificationDataHistory(
   sinceHoursAgoToCheck: number = 24, untilHoursAgoToCheck: number = 0
 ) {
   const classificationData = await allClassificationDataFetcher(sinceHoursAgoToCheck, untilHoursAgoToCheck);
@@ -322,7 +322,9 @@ async function fetchSubscribeClassificationDataHistory(
   console.debug(classificationData[0]);
   console.debug(classificationData[classificationData.length - 1]);
   console.info("classificationData.length", classificationData.length);
+}
 
+async function subscribeClassificationDataHistory() {
   let subClassificationData = pool.sub(
     [upstreamWsUrl],
     [
@@ -373,15 +375,14 @@ async function fetchSubscribeClassificationDataHistory(
 }
 
 async function listen(): Promise<void> {
+  subscribeClassificationDataHistory();
+
   const sinceHoursAgoToCheck = 24 * 1;
   const untilHoursAgoToCheck = 0;
-
-  // throw new Error("stop");
-  // exit();
   const fetchStartTime = performance.now();
-  await fetchSubscribeClassificationDataHistory(sinceHoursAgoToCheck, untilHoursAgoToCheck);
+  await fetchClassificationDataHistory(sinceHoursAgoToCheck, untilHoursAgoToCheck);
   const fetchEndTime = performance.now();
-  console.info("fetchSubscribeClassificationDataHistory elapsed time: ", fetchEndTime - fetchStartTime);
+  console.info("fetchClassificationDataHistory elapsed time: ", fetchEndTime - fetchStartTime);
 
   // Regular event fetcher warmup
   setInterval(() => regularEventFetcherWarmup, 60 * 1000);
