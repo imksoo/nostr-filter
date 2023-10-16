@@ -81,8 +81,8 @@ const languageClassificationCache = new LRUCache(
 // 書き込み用の上流リレーとの接続(あらかじめ接続しておいて、WS接続直後のイベントでも取りこぼしを防ぐため)
 let upstreamWriteSocket = new WebSocket(upstreamWsUrl);
 
-console.log(JSON.stringify({ msg: "process.env", ...process.env }));
-console.log(
+console.info(JSON.stringify({ msg: "process.env", ...process.env }));
+console.info(
   JSON.stringify({
     msg: "configs",
     listenPort,
