@@ -10,6 +10,7 @@ import * as mime from "mime-types";
 import dotenv from "dotenv";
 
 dotenv.config();
+const NODE_ENV = process.env.NODE_ENV || "production";
 const listenPort: number = parseInt(process.env.LISTEN_PORT ?? "8081"); // クライアントからのWebSocket待ち受けポート
 const upstreamHttpUrl: string = process.env.UPSTREAM_HTTP_URL ??
   "http://localhost:8080"; // 上流のWebSocketサーバのURL
