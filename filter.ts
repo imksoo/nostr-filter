@@ -41,7 +41,7 @@ if (NODE_ENV === "production") {
 
   };
   console.debug = (...data) => {
-  
+
   };
 }
 
@@ -296,7 +296,7 @@ const allClassificationDataFetcher = async (sinceHoursAgoToCheck: number = 24, u
   });
 };
 
-async function fetchSubscribeClassificationDataHistory(
+async function fetchClassificationDataHistory(
   sinceHoursAgoToCheck: number = 24, untilHoursAgoToCheck: number = 0
 ) {
   const classificationData = await allClassificationDataFetcher(sinceHoursAgoToCheck, untilHoursAgoToCheck);
@@ -326,7 +326,9 @@ async function fetchSubscribeClassificationDataHistory(
   console.debug(classificationData[0]);
   console.debug(classificationData[classificationData.length - 1]);
   console.info("classificationData.length", classificationData.length);
+}
 
+async function subscribeClassificationDataHistory() {
   let subClassificationData = pool.sub(
     [upstreamWsUrl],
     [
@@ -377,15 +379,39 @@ async function fetchSubscribeClassificationDataHistory(
 }
 
 async function listen(): Promise<void> {
-  const sinceHoursAgoToCheck = 24 * 1;
-  const untilHoursAgoToCheck = 0;
+  subscribeClassificationDataHistory();
 
-  // throw new Error("stop");
-  // exit();
+  const sinceHoursAgoToCheck = 24 * 1;
+  const untilHoursAgoToCheck = 4;
   const fetchStartTime = performance.now();
-  await fetchSubscribeClassificationDataHistory(sinceHoursAgoToCheck, untilHoursAgoToCheck);
+  // Fetch short time range data as initial data (fast response)
+  await fetchClassificationDataHistory(untilHoursAgoToCheck, 0);
+  console.info("ClassificationCache after initial data");
+  console.info("nsfwClassificationCache.size", nsfwClassificationCache.size);
+  console.info("languageClassificationCache.size", languageClassificationCache.size);
+  console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size);
+
+  // Fetch longer time range data in the background (maximum for 3 days)
+  (async () => {
+    await fetchClassificationDataHistory(sinceHoursAgoToCheck, untilHoursAgoToCheck);
+    console.info("ClassificationCache after fetching", sinceHoursAgoToCheck, untilHoursAgoToCheck);
+    console.info("nsfwClassificationCache.size", nsfwClassificationCache.size);
+    console.info("languageClassificationCache.size", languageClassificationCache.size);
+    console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size);
+    await fetchClassificationDataHistory(sinceHoursAgoToCheck * 2, sinceHoursAgoToCheck);
+    console.info("ClassificationCache after fetching", sinceHoursAgoToCheck * 2, sinceHoursAgoToCheck);
+    console.info("nsfwClassificationCache.size", nsfwClassificationCache.size);
+    console.info("languageClassificationCache.size", languageClassificationCache.size);
+    console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size);
+    await fetchClassificationDataHistory(sinceHoursAgoToCheck * 3, sinceHoursAgoToCheck * 2);
+    console.info("ClassificationCache after fetching", sinceHoursAgoToCheck * 3, sinceHoursAgoToCheck * 2);
+    console.info("nsfwClassificationCache.size", nsfwClassificationCache.size);
+    console.info("languageClassificationCache.size", languageClassificationCache.size);
+    console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size);
+  })();
+
   const fetchEndTime = performance.now();
-  console.info("fetchSubscribeClassificationDataHistory elapsed time: ", fetchEndTime - fetchStartTime);
+  console.info("fetchClassificationDataHistory elapsed time: ", fetchEndTime - fetchStartTime);
 
   // Regular event fetcher warmup
   setInterval(() => regularEventFetcherWarmup, 60 * 1000);
@@ -1089,8 +1115,29 @@ async function listen(): Promise<void> {
               cachedLanguageClassification = languageClassificationCache.get(eventId) ?? [];
             }
             else {
-              // Assume it is english by default, similar to how libretranslate handle unknown language
-              cachedLanguageClassification = [{ confidence: 0, language: "en" }];
+              // TODO checkLanguageClassificationWithAttempt is function that try to check language classification with several attempts
+              // However, this function is not fully tested and there are bugs with any notes event before EOSE, thus setting the default to empty arrray.
+              // Further analysis needed before using this function.
+              const checkLanguageClassificationWithAttempt = async (eventId: any, numAttempt: number = 2) => {
+                let counter = 0;
+                let result = undefined;
+
+                while (counter < numAttempt) {
+                  console.info("Checking Language for ", eventId, ", waiting for ", (counter + 1) * 500, Date.now());
+                  // Force async sleep await for certain times
+                  await new Promise(r => setTimeout(r, (counter + 1) * 500));
+                  console.info("Checking Language for ", eventId, ", after waiting for ", (counter + 1) * 500, Date.now());
+                  if (languageClassificationCache.has(eventId)) {
+                    result = languageClassificationCache.get(eventId);
+                    console.info("Found Language for ", eventId, result);
+                    break;
+                  }
+                  counter++;
+                }
+                return result;
+              };
+              // cachedLanguageClassification = await checkLanguageClassificationWithAttempt(eventId);
+              cachedLanguageClassification = cachedLanguageClassification ?? [];
             }
 
             if (filterLanguageMode.includes("all")) {
