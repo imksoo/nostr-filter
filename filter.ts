@@ -1115,8 +1115,29 @@ async function listen(): Promise<void> {
               cachedLanguageClassification = languageClassificationCache.get(eventId) ?? [];
             }
             else {
-              // Assume it is english by default, similar to how libretranslate handle unknown language
-              cachedLanguageClassification = [{ confidence: 0, language: "en" }];
+              // TODO checkLanguageClassificationWithAttempt is function that try to check language classification with several attempts
+              // However, this function is not fully tested and there are bugs with any notes event before EOSE, thus setting the default to empty arrray.
+              // Further analysis needed before using this function.
+              const checkLanguageClassificationWithAttempt = async (eventId: any, numAttempt: number = 2) => {
+                let counter = 0;
+                let result = undefined;
+
+                while (counter < numAttempt) {
+                  console.info("Checking Language for ", eventId, ", waiting for ", (counter + 1) * 500, Date.now());
+                  // Force async sleep await for certain times
+                  await new Promise(r => setTimeout(r, (counter + 1) * 500));
+                  console.info("Checking Language for ", eventId, ", after waiting for ", (counter + 1) * 500, Date.now());
+                  if (languageClassificationCache.has(eventId)) {
+                    result = languageClassificationCache.get(eventId);
+                    console.info("Found Language for ", eventId, result);
+                    break;
+                  }
+                  counter++;
+                }
+                return result;
+              };
+              // cachedLanguageClassification = await checkLanguageClassificationWithAttempt(eventId);
+              cachedLanguageClassification = cachedLanguageClassification ?? [];
             }
 
             if (filterLanguageMode.includes("all")) {
