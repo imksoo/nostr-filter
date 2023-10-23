@@ -1037,7 +1037,7 @@ async function listen(): Promise<void> {
 
             // Filter content (NSFW/SFW) configurations
             let filterContentMode = searchParams.get("content") ?? "sfw";
-            let validFilterContentMode = ["all", "sfw", "nsfw"];
+            let validFilterContentMode = ["all", "sfw", "partialsfw", "nsfw"];
             let nsfwConfidenceThresold = parseInt(
               searchParams.get("nsfw_confidence") ?? "75",
             );
@@ -1095,14 +1095,29 @@ async function listen(): Promise<void> {
               nsfwHashtagExist;
             switch (filterContentMode) {
               case "sfw":
+                if (!shouldRelay) break;
+                // Accept as long as it is not nsfw or it has not content warning or it has not nswf hashtag
                 shouldRelay = !isSensitiveContent;
-                if (!shouldRelay) because = "Non-NSFW only filtered";
+                if (!shouldRelay) because = "Non-NSFW content only filtered";
+                break;
+              case "partialsfw":
+                if (!shouldRelay) break;
+                // Accept as long as it is not nsfw or it has content warning or it has nsfw hashtag
+                if (contentWarningExist || nsfwHashtagExist) {
+                  shouldRelay = true;
+                }
+                else if (!isNsfw) {
+                  shouldRelay = true;
+                }
+                if (!shouldRelay) because = "Partial NSFW content only filtered";
                 break;
               case "nsfw":
+                if (!shouldRelay) break;
                 shouldRelay = isSensitiveContent;
-                if (!shouldRelay) because = "NSFW only filtered";
+                if (!shouldRelay) because = "NSFW content only filtered";
                 break;
               default:
+                if (!shouldRelay) break;
                 shouldRelay = true;
                 because = "";
                 break;
