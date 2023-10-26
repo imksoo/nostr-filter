@@ -2,31 +2,90 @@ import http from "http";
 import WebSocket from "ws";
 import fs from "fs";
 import path from "path";
+import url from "url";
 import * as net from "net";
 import { Mutex } from "async-mutex";
 import { v4 as uuidv4 } from "uuid";
 import * as mime from "mime-types";
+import dotenv from "dotenv";
 
+dotenv.config();
+const NODE_ENV = process.env.NODE_ENV || "production";
+if (NODE_ENV === "production") {
+  // Suppress log and debug messages from console. console.info, console.warn, and console.error are still available in production mode
+  console.log = (...data) => {
+
+  };
+  console.debug = (...data) => {
+  
+  };
+}
 const listenPort: number = parseInt(process.env.LISTEN_PORT ?? "8081"); // クライアントからのWebSocket待ち受けポート
-const upstreamHttpUrl: string =
-  process.env.UPSTREAM_HTTP_URL ?? "http://localhost:8080"; // 上流のWebSocketサーバのURL
-const upstreamWsUrl: string =
-  process.env.UPSTREAM_WS_URL ?? "ws://localhost:8080"; // 上流のWebSocketサーバのURL
+const upstreamHttpUrl: string = process.env.UPSTREAM_HTTP_URL ??
+  "http://localhost:8080"; // 上流のWebSocketサーバのURL
+const upstreamWsUrl: string = process.env.UPSTREAM_WS_URL ??
+  "ws://localhost:8080"; // 上流のWebSocketサーバのURL
 
-console.log(JSON.stringify({ msg: "process.env", ...process.env }));
-console.log(
-  JSON.stringify({ msg: "configs", listenPort, upstreamHttpUrl, upstreamWsUrl })
+// 書き込み用の上流リレーとの接続(あらかじめ接続しておいて、WS接続直後のイベントでも取りこぼしを防ぐため)
+let upstreamWriteSocket = new WebSocket(upstreamWsUrl);
+
+console.info(JSON.stringify({ msg: "process.env", ...process.env }));
+console.info(
+  JSON.stringify({
+    msg: "configs",
+    listenPort,
+    upstreamHttpUrl,
+    upstreamWsUrl,
+  }),
 );
 
 // NostrのEvent contentsのフィルタリング用正規表現パターンの配列
 const contentFilters: RegExp[] = [
+  /avive/i,
+  /web3/i,
+  /lnbc/,
+  /t\.me/,
+  /nostr-vip\.top/,
+  /1C-0OTP4DRCWJY17XvOHO/,
+  /\$GPT/,
+  /Claim your free/,
+  /Claim Free/i,
+  /shop\.55uu\.wang/,
+  /dosoos/i,
+  /coderba/i,
+  /人工智能/,
+  /dapp/,
+  /motherfuckers/,
+  /shitspaming/,
+  /telegra\.ph/,
+  /幼女爱好/,
 ];
 
 // ブロックするユーザーの公開鍵の配列
-const blockedPubkeys: string[] = [];
+const blockedPubkeys: string[] =
+  (typeof process.env.BLOCKED_PUBKEYS !== "undefined"  && process.env.BLOCKED_PUBKEYS !== "")
+    ? process.env.BLOCKED_PUBKEYS.split(",").map((pubkey) => pubkey.trim())
+    : [];
+// Allow only whitelisted pubkey to write events
+const whitelistedPubkeys: string[] =
+  (typeof process.env.WHITELISTED_PUBKEYS !== "undefined" &&
+      process.env.WHITELISTED_PUBKEYS !== "")
+    ? process.env.WHITELISTED_PUBKEYS.split(",").map((pubkey) => pubkey.trim())
+    : [];
+// Filter proxy events
+const filterProxyEvents = process.env.FILTER_PROXY_EVENTS === "true";
 
 // クライアントIPアドレスのCIDRフィルタ
 const cidrRanges: string[] = [
+  "43.205.189.224/32",
+  "34.173.202.51/32",
+  "129.205.113.128/25",
+  "180.97.221.192/32",
+  "62.197.152.37/32",
+  "157.230.17.234/32",
+  "185.25.224.220/32",
+  "35.231.153.85/32",
+  "103.135.251.248/32",
 ];
 
 // CIDRマッチ用のフィルタ関数
@@ -47,9 +106,11 @@ function ipMatchesCidr(ip: string, cidr: string): boolean {
     const ipNum = BigInt(`0x${ip.replace(/:/g, "")}`);
     const rangeNum = BigInt(`0x${range.replace(/:/g, "")}`);
     const mask6 = BigInt(
-      `0x${"f".repeat(32 - parseInt(bits, 10))}${"0".repeat(
-        parseInt(bits, 10)
-      )}`
+      `0x${"f".repeat(32 - parseInt(bits, 10))}${
+        "0".repeat(
+          parseInt(bits, 10),
+        )
+      }`,
     );
 
     return (ipNum & mask6) === (rangeNum & mask6);
@@ -71,7 +132,7 @@ function loggingMemoryUsage(): void {
   const usedHeapSize = Math.round(memoryUsage.heapUsed / 1024 / 1024);
   const totalHeapSize = Math.round(memoryUsage.heapTotal / 1024 / 1024);
   const rssSize = Math.round(memoryUsage.rss / 1024 / 1024);
-  console.log(
+  console.info(
     JSON.stringify({
       msg: "memoryUsage",
       currentTime,
@@ -79,7 +140,7 @@ function loggingMemoryUsage(): void {
       totalHeapSize,
       rssSize,
       connectionCount,
-    })
+    }),
   );
 }
 
@@ -89,7 +150,7 @@ setInterval(() => {
 }, 1 * 60 * 1000); // ヒープ状態を1分ごとに実行
 
 function listen(): void {
-  console.log(JSON.stringify({ msg: "Started", listenPort }));
+  console.info(JSON.stringify({ msg: "Started", listenPort }));
 
   // HTTPサーバーの構成
   const server = http.createServer(
@@ -102,14 +163,14 @@ function listen(): void {
       } else if (req.url && req.headers.accept !== "application/nostr+json") {
         // staticディレクトリ配下の静的ファイルを返却する
         console.log(JSON.stringify({ msg: "HTTP GET", url: req.url }));
-        const filePath = path.join(__dirname, "/static/", req.url);
-        const contentType =
-          mime.contentType(path.extname(filePath)) ||
+        const pathname = url.parse(req.url).pathname || "";
+        const filePath = path.join(__dirname, "/static/", pathname);
+        const contentType = mime.contentType(path.extname(filePath)) ||
           "application/octet-stream";
         fs.readFile(filePath, (err, data) => {
           if (err) {
-            console.log(
-              JSON.stringify({ msg: "HTTP RESOURCE NOT FOUND", url: req.url })
+            console.warn(
+              JSON.stringify({ msg: "HTTP RESOURCE NOT FOUND", url: req.url }),
             );
             res.writeHead(200, { "Content-Type": "text/html" });
             res.end("Please use a Nostr client to connect...\n");
@@ -120,7 +181,7 @@ function listen(): void {
                 url: req.url,
                 contentType,
                 length: data.length,
-              })
+              }),
             );
             res.writeHead(200, { "Content-Type": contentType });
             res.end(data);
@@ -139,11 +200,11 @@ function listen(): void {
           (proxyRes) => {
             res.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers);
             proxyRes.pipe(res);
-          }
+          },
         );
         req.pipe(proxyReq);
       }
-    }
+    },
   );
   // WebSocketサーバーの構成
   const wss = new WebSocket.Server({ server });
@@ -175,9 +236,9 @@ function listen(): void {
       const ip =
         (typeof req.headers["cloudfront-viewer-address"] === "string"
           ? req.headers["cloudfront-viewer-address"]
-              .split(":")
-              .slice(0, -1)
-              .join(":")
+            .split(":")
+            .slice(0, -1)
+            .join(":")
           : undefined) ||
         (typeof req.headers["x-real-ip"] === "string"
           ? req.headers["x-real-ip"]
@@ -193,8 +254,8 @@ function listen(): void {
       const port =
         (typeof req.headers["cloudfront-viewer-address"] === "string"
           ? parseInt(
-              req.headers["cloudfront-viewer-address"].split(":").slice(-1)[0]
-            )
+            req.headers["cloudfront-viewer-address"].split(":").slice(-1)[0],
+          )
           : undefined) ||
         (typeof req.headers["x-real-port"] === "string"
           ? parseInt(req.headers["x-real-port"])
@@ -205,14 +266,14 @@ function listen(): void {
       if (isIpBlocked) {
         const because = "Blocked by CIDR filter";
         // IPアドレスがCIDR範囲内にある場合、接続を拒否
-        console.log(
+        console.warn(
           JSON.stringify({
             msg: "CONNECTING BLOCKED",
             because,
             ip,
             port,
             socketId,
-          })
+          }),
         );
         const blockedMessage = JSON.stringify([
           "NOTICE",
@@ -226,7 +287,7 @@ function listen(): void {
             socketId,
             because,
             blockedMessage,
-          })
+          }),
         );
         upstreamSocket.close();
         downstreamSocket.send(blockedMessage);
@@ -241,7 +302,7 @@ function listen(): void {
       });
       if (connectionCountForIP > 100) {
         const because = "Blocked by too many connections";
-        console.log(
+        console.warn(
           JSON.stringify({
             msg: "CONNECTING BLOCKED",
             because,
@@ -249,7 +310,7 @@ function listen(): void {
             port,
             socketId,
             connectionCountForIP,
-          })
+          }),
         );
         const blockedMessage = JSON.stringify([
           "NOTICE",
@@ -264,21 +325,22 @@ function listen(): void {
             connectionCountForIP,
             because,
             blockedMessage,
-          })
+          }),
         );
         upstreamSocket.close();
         downstreamSocket.send(blockedMessage);
         downstreamSocket.close(1008, "Too many requests.");
         return;
       } else {
-        console.log(
+        console.info(
           JSON.stringify({
             msg: "CONNECTED",
             ip,
             port,
             socketId,
             connectionCountForIP,
-          })
+            headers: req.headers,
+          }),
         );
         connectionCountsByIP.set(ip, connectionCountForIP);
       }
@@ -290,7 +352,12 @@ function listen(): void {
         resetIdleTimeout(upstreamSocket);
 
         const message = data.toString();
-        const event = JSON.parse(message);
+        let event: any[];
+        try {
+          event = JSON.parse(message);
+        } catch (err: any) {
+          event = ["INVALID", err.message ?? JSON.stringify(err)];
+        }
 
         let shouldRelay = true;
         let because = "";
@@ -319,7 +386,31 @@ function listen(): void {
                 break;
               }
             }
+
+            // Proxyイベントをフィルターする
+            if (filterProxyEvents) {
+              for (const tag of event[1].tags) {
+                if (tag[0] === "proxy") {
+                  shouldRelay = false;
+                  because = "Blocked event by proxied event";
+                  break;
+                }
+              }
+            }
           }
+
+          // Allow write any event only for whitelisted pubkeys in downstream messages
+          for (const allowed of whitelistedPubkeys) {
+            if (event[1].pubkey !== allowed) {
+              shouldRelay = false;
+              because = "Only whitelisted pubkey can write events";
+              // break;
+            } else {
+              shouldRelay = true;
+              because = "";
+            }
+          }
+
           // イベント内容とフィルターの判定結果をコンソールにログ出力
           if (shouldRelay) {
             console.log(
@@ -330,7 +421,7 @@ function listen(): void {
                 socketId,
                 connectionCountForIP,
                 event: event[1],
-              })
+              }),
             );
           } else {
             console.log(
@@ -342,7 +433,7 @@ function listen(): void {
                 socketId,
                 connectionCountForIP,
                 event: event[1],
-              })
+              }),
             );
           }
         } else if (event[0] === "REQ") {
@@ -360,14 +451,19 @@ function listen(): void {
               connectionCountForIP,
               subscriptionId,
               req: event[2],
-            })
+            }),
           );
+
+          if (event[2].limit && event[2].limit > 500) {
+            event[2].limit = 500;
+            isMessageEdited = true;
+          }
         } else if (event[0] === "CLOSE") {
           const subscriptionId = event[1];
           const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
           subscriptionIdAndIPAddress.set(
             socketAndSubscriptionId,
-            ip + " CLOSED"
+            ip + " CLOSED",
           );
           subscriptionIdAndPortNumber.set(socketAndSubscriptionId, -port);
           // REQイベントの内容をコンソールにログ出力
@@ -381,9 +477,9 @@ function listen(): void {
               subscriptionId,
               req: event[2],
               subscriptionSize: transferredSizePerSubscriptionId.get(
-                socketAndSubscriptionId
+                socketAndSubscriptionId,
               ),
-            })
+            }),
           );
         } else {
           console.log(
@@ -394,8 +490,13 @@ function listen(): void {
               socketId,
               connectionCountForIP,
               message: event,
-            })
+            }),
           );
+          
+          if (event[0] === "INVALID") {
+            shouldRelay = false;
+            because = event[1];
+          }
         }
 
         if (shouldRelay) {
@@ -406,11 +507,18 @@ function listen(): void {
           let retryCount = 0;
 
           function sendMessage(): boolean {
+            let msg = message;
+            if (isMessageEdited) {
+              msg = JSON.stringify(event);
+            }
+
+            // 書き込んで良いイベントはあらかじめ接続済みのソケットに送信する
+            if (event[0] === "EVENT") {
+              upstreamWriteSocket.send(msg);
+            }
+
+            // REQやEVENTを個別のソケットでやり取りする(OKメッセージの受信のため)
             if (upstreamSocket.readyState === WebSocket.OPEN) {
-              let msg = message;
-              if (isMessageEdited) {
-                msg = JSON.stringify(event);
-              }
               upstreamSocket.send(msg);
 
               // メッセージが送信されたのでフラグをtrueにする
@@ -424,7 +532,7 @@ function listen(): void {
                     socketId,
                     connectionCountForIP,
                     retryCount,
-                  })
+                  }),
                 );
               }
               return false;
@@ -446,7 +554,7 @@ function listen(): void {
                   socketId,
                   connectionCountForIP,
                   retryCount,
-                })
+                }),
               );
               return false;
             }
@@ -476,7 +584,7 @@ function listen(): void {
                     socketId,
                     connectionCountForIP,
                     retryCount,
-                  })
+                  }),
                 );
               }
             }, 30 * 1000);
@@ -499,7 +607,7 @@ function listen(): void {
                 connectionCountForIP,
                 blockedMessage,
                 event,
-              })
+              }),
             );
             downstreamSocket.send(blockedMessage);
           } else {
@@ -516,7 +624,7 @@ function listen(): void {
                 connectionCountForIP,
                 blockedMessage,
                 event,
-              })
+              }),
             );
             downstreamSocket.send(blockedMessage);
           }
@@ -539,14 +647,14 @@ function listen(): void {
             port,
             socketId,
             connectionCountForIP,
-          })
+          }),
         );
         upstreamSocket.close();
         clearIdleTimeout(downstreamSocket);
       });
 
       downstreamSocket.on("error", async (error: Error) => {
-        console.log(
+        console.warn(
           JSON.stringify({
             msg: "DOWNSTREAM ERROR",
             ip,
@@ -554,7 +662,7 @@ function listen(): void {
             socketId,
             connectionCountForIP,
             error,
-          })
+          }),
         );
         downstreamSocket.close();
         upstreamSocket.close();
@@ -563,14 +671,14 @@ function listen(): void {
       // 上流のリレーサーバーとの接続
       function connectUpstream(
         upstreamSocket: WebSocket,
-        downstreamSocket: WebSocket
+        downstreamSocket: WebSocket,
       ): void {
         upstreamSocket.on("open", async () => {
           console.log(
             JSON.stringify({
               msg: "UPSTREAM CONNECTED",
               socketId,
-            })
+            }),
           );
           setIdleTimeout(upstreamSocket);
         });
@@ -580,19 +688,19 @@ function listen(): void {
             JSON.stringify({
               msg: "UPSTREAM DISCONNECTED",
               socketId,
-            })
+            }),
           );
           downstreamSocket.close();
           clearIdleTimeout(upstreamSocket);
         });
 
         upstreamSocket.on("error", async (error: Error) => {
-          console.log(
+          console.warn(
             JSON.stringify({
               msg: "UPSTREAM ERROR",
               socketId,
               error,
-            })
+            }),
           );
           downstreamSocket.close();
           upstreamSocket.close();
@@ -600,7 +708,12 @@ function listen(): void {
 
         upstreamSocket.on("message", async (data: WebSocket.Data) => {
           const message = data.toString();
-          const event = JSON.parse(message);
+          let event: any[];
+          try {
+            event = JSON.parse(message);
+          } catch (err: any) {
+            event = ["INVALID", err.message ?? JSON.stringify(err)];
+          }
           resetIdleTimeout(downstreamSocket);
           resetIdleTimeout(upstreamSocket);
 
@@ -623,8 +736,17 @@ function listen(): void {
                 break;
               }
             }
+          } else if (event[0] === "INVALID") {
+            shouldRelay = false;
+            because = event[1];
           }
-          const result = JSON.parse(message);
+
+          let result: any[];
+          try {
+            result = JSON.parse(message);
+          } catch (err: any) {
+            result = ["INVALID", err.message ?? JSON.stringify(err)];
+          }
           const resultType = result[0];
           if (resultType === "OK") {
             console.log(
@@ -635,7 +757,7 @@ function listen(): void {
                 resultType,
                 socketId,
                 eventId: result[1],
-              })
+              }),
             );
           } else if (resultType === "NOTICE") {
             console.log(
@@ -646,20 +768,22 @@ function listen(): void {
                 resultType,
                 socketId,
                 message: result,
-              })
+              }),
             );
+          } else if (resultType === "INVALID") {
+            shouldRelay = false;
+            because = result[1];
           } else {
             const subscriptionId = result[1];
             const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
             let subscriptionSize;
             await subscriptionSizeMutex.runExclusive(async () => {
-              subscriptionSize =
-                (transferredSizePerSubscriptionId.get(
-                  socketAndSubscriptionId
-                ) ?? 0) + message.length;
+              subscriptionSize = (transferredSizePerSubscriptionId.get(
+                socketAndSubscriptionId,
+              ) ?? 0) + message.length;
               transferredSizePerSubscriptionId.set(
                 socketAndSubscriptionId,
-                subscriptionSize
+                subscriptionSize,
               );
             });
             console.log(
@@ -671,7 +795,7 @@ function listen(): void {
                 socketId,
                 subscriptionId,
                 subscriptionSize,
-              })
+              }),
             );
           }
           if (shouldRelay) {
@@ -685,12 +809,12 @@ function listen(): void {
                 port,
                 socketId,
                 event,
-              })
+              }),
             );
           }
         });
       }
-    }
+    },
   );
   // HTTP+WebSocketサーバーの起動
   server.listen(listenPort);
@@ -709,7 +833,7 @@ const defaultTimeoutValue = 10 * 60 * 1000;
 
 function setIdleTimeout(
   socket: WebSocket,
-  timeout: number = defaultTimeoutValue
+  timeout: number = defaultTimeoutValue,
 ): void {
   const timeoutId = setTimeout(() => {
     socket.close();
@@ -721,7 +845,7 @@ function setIdleTimeout(
 
 function resetIdleTimeout(
   socket: WebSocket,
-  defaultTimeout: number = defaultTimeoutValue
+  defaultTimeout: number = defaultTimeoutValue,
 ): void {
   clearTimeout(idleTimeouts.get(socket));
   const timeout = timeoutValues.get(socket) ?? defaultTimeout;
