@@ -64,17 +64,17 @@ const nHoursAgoInUnixTime = (hrs: number): number =>
 
 const nsfwClassificationCache = new LRUCache(
   {
-    max: 100000,
-    // how long to live in ms
-    ttl: 24 * 60 * 60 * 1000,
+    max: 200000,
+    // how long to live in ms (3 days)
+    ttl: 3 * 24 * 60 * 60 * 1000,
   },
 );
 
 const languageClassificationCache = new LRUCache(
   {
-    max: 400000,
-    // how long to live in ms
-    ttl: 24 * 60 * 60 * 1000,
+    max: 500000,
+    // how long to live in ms (3 days)
+    ttl: 3 * 24 * 60 * 60 * 1000,
   },
 );
 
