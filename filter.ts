@@ -74,6 +74,8 @@ const whitelistedPubkeys: string[] =
     : [];
 // Filter proxy events
 const filterProxyEvents = process.env.FILTER_PROXY_EVENTS === "true";
+// Forward request headers to upstream
+const enableForwardReqHeaders = process.env.ENABLE_FORWARD_REQ_HEADERS === "true";
 
 // クライアントIPアドレスのCIDRフィルタ
 const cidrRanges: string[] = [
@@ -222,8 +224,12 @@ function listen(): void {
       // ソケットごとにユニークなIDを付与
       const socketId = uuidv4();
 
+      // Check whether we want to forward original request headers to the upstream server
+      // This will be useful if the upstream server need original request headers to do operations like rate-limiting, etc.
+      let wsClientOptions = enableForwardReqHeaders ? { headers: req.headers } : undefined;
+
       // 上流となるリレーサーバーと接続
-      let upstreamSocket = new WebSocket(upstreamWsUrl);
+      let upstreamSocket = new WebSocket(upstreamWsUrl, wsClientOptions);
       connectUpstream(upstreamSocket, downstreamSocket);
 
       // クライアントとの接続が確立したら、アイドルタイムアウトを設定
