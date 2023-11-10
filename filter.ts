@@ -17,7 +17,7 @@ if (NODE_ENV === "production") {
 
   };
   console.debug = (...data) => {
-  
+
   };
 }
 const listenPort: number = parseInt(process.env.LISTEN_PORT ?? "8081"); // クライアントからのWebSocket待ち受けポート
@@ -29,6 +29,19 @@ const upstreamWsUrl: string = process.env.UPSTREAM_WS_URL ??
 // 書き込み用の上流リレーとの接続(あらかじめ接続しておいて、WS接続直後のイベントでも取りこぼしを防ぐため)
 let upstreamWriteSocket = new WebSocket(upstreamWsUrl);
 
+// NostrのEvent contentsのフィルタリング用正規表現パターンの配列
+const contentFilters: RegExp[] = Object.keys(process.env)
+  .filter(key => key.startsWith('MUTE_FILTER_'))
+  .map(key => {
+    const pattern = process.env[key]!;
+    const match = pattern.match(/^\/(.+)\/([gimy]*)$/);
+    if (!match) {
+      return new RegExp(pattern);
+    } else {
+      return new RegExp(match[1], match[2]);
+    }
+  });
+
 console.info(JSON.stringify({ msg: "process.env", ...process.env }));
 console.info(
   JSON.stringify({
@@ -36,39 +49,19 @@ console.info(
     listenPort,
     upstreamHttpUrl,
     upstreamWsUrl,
+    contentFilters: contentFilters.map(regex => `/${regex.source}/${regex.flags}`),
   }),
 );
 
-// NostrのEvent contentsのフィルタリング用正規表現パターンの配列
-const contentFilters: RegExp[] = [
-  /avive/i,
-  /lnbc/,
-  /t\.me/,
-  /nostr-vip\.top/,
-  /1C-0OTP4DRCWJY17XvOHO/,
-  /\$GPT/,
-  /Claim your free/,
-  /Claim Free/i,
-  /shop\.55uu\.wang/,
-  /dosoos/i,
-  /coderba/i,
-  /人工智能/,
-  /dapp/,
-  /motherfuckers/,
-  /shitspaming/,
-  /telegra\.ph/,
-  /幼女爱好/,
-];
-
 // ブロックするユーザーの公開鍵の配列
 const blockedPubkeys: string[] =
-  (typeof process.env.BLOCKED_PUBKEYS !== "undefined"  && process.env.BLOCKED_PUBKEYS !== "")
+  (typeof process.env.BLOCKED_PUBKEYS !== "undefined" && process.env.BLOCKED_PUBKEYS !== "")
     ? process.env.BLOCKED_PUBKEYS.split(",").map((pubkey) => pubkey.trim())
     : [];
 // Allow only whitelisted pubkey to write events
 const whitelistedPubkeys: string[] =
   (typeof process.env.WHITELISTED_PUBKEYS !== "undefined" &&
-      process.env.WHITELISTED_PUBKEYS !== "")
+    process.env.WHITELISTED_PUBKEYS !== "")
     ? process.env.WHITELISTED_PUBKEYS.split(",").map((pubkey) => pubkey.trim())
     : [];
 // Filter proxy events
@@ -107,10 +100,9 @@ function ipMatchesCidr(ip: string, cidr: string): boolean {
     const ipNum = BigInt(`0x${ip.replace(/:/g, "")}`);
     const rangeNum = BigInt(`0x${range.replace(/:/g, "")}`);
     const mask6 = BigInt(
-      `0x${"f".repeat(32 - parseInt(bits, 10))}${
-        "0".repeat(
-          parseInt(bits, 10),
-        )
+      `0x${"f".repeat(32 - parseInt(bits, 10))}${"0".repeat(
+        parseInt(bits, 10),
+      )
       }`,
     );
 
@@ -497,7 +489,7 @@ function listen(): void {
               message: event,
             }),
           );
-          
+
           if (event[0] === "INVALID") {
             shouldRelay = false;
             because = event[1];
