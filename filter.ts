@@ -43,15 +43,6 @@ const contentFilters: RegExp[] = Object.keys(process.env)
   });
 
 console.info(JSON.stringify({ msg: "process.env", ...process.env }));
-console.info(
-  JSON.stringify({
-    msg: "configs",
-    listenPort,
-    upstreamHttpUrl,
-    upstreamWsUrl,
-    contentFilters: contentFilters.map(regex => `/${regex.source}/${regex.flags}`),
-  }),
-);
 
 // ブロックするユーザーの公開鍵の配列
 const blockedPubkeys: string[] =
@@ -70,17 +61,9 @@ const filterProxyEvents = process.env.FILTER_PROXY_EVENTS === "true";
 const enableForwardReqHeaders = process.env.ENABLE_FORWARD_REQ_HEADERS === "true";
 
 // クライアントIPアドレスのCIDRフィルタ
-const cidrRanges: string[] = [
-  "43.205.189.224/32",
-  "34.173.202.51/32",
-  "129.205.113.128/25",
-  "180.97.221.192/32",
-  "62.197.152.37/32",
-  "157.230.17.234/32",
-  "185.25.224.220/32",
-  "35.231.153.85/32",
-  "103.135.251.248/32",
-];
+const cidrRanges: string[] = Object.keys(process.env)
+  .filter(key => key.startsWith('BLOCKED_IP_ADDR_'))
+  .map(key => (process.env[key]!));
 
 // CIDRマッチ用のフィルタ関数
 function ipMatchesCidr(ip: string, cidr: string): boolean {
@@ -111,6 +94,17 @@ function ipMatchesCidr(ip: string, cidr: string): boolean {
 
   return false;
 }
+
+console.info(
+  JSON.stringify({
+    msg: "configs",
+    listenPort,
+    upstreamHttpUrl,
+    upstreamWsUrl,
+    contentFilters: contentFilters.map(regex => `/${regex.source}/${regex.flags}`),
+    blockedIPAddresses: cidrRanges,
+  }),
+);
 
 // 全体の接続数
 let connectionCount = 0;
