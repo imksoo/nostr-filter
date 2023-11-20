@@ -81,16 +81,6 @@ const languageClassificationCache = new LRUCache(
 // 書き込み用の上流リレーとの接続(あらかじめ接続しておいて、WS接続直後のイベントでも取りこぼしを防ぐため)
 let upstreamWriteSocket = new WebSocket(upstreamWsUrl);
 
-console.info(JSON.stringify({ msg: "process.env", ...process.env }));
-console.info(
-  JSON.stringify({
-    msg: "configs",
-    listenPort,
-    upstreamHttpUrl,
-    upstreamWsUrl,
-  }),
-);
-
 // NostrのEvent contentsのフィルタリング用正規表現パターンの配列
 const contentFilters: RegExp[] = Object.keys(process.env)
   .filter(key => key.startsWith('MUTE_FILTER_'))
