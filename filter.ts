@@ -54,6 +54,7 @@ const NOSTR_MONITORING_BOT_PUBLIC_KEY: string =
 const CLASSIFICATION_EVENT_KIND = 9978;
 const NSFW_CLASSIFICATION_D_TAG = "nostr-nsfw-classification";
 const LANGUAGE_CLASSIFICATION_D_TAG = "nostr-language-classification";
+const HATE_SPEECH_CLASSIFICATION_D_TAG = "nostr-hate-speech-classification";
 
 const pool = new SimplePool();
 const fetcherNonPool = NostrFetcher.init();
@@ -73,6 +74,14 @@ const nsfwClassificationCache = new LRUCache(
 const languageClassificationCache = new LRUCache(
   {
     max: 500000,
+    // how long to live in ms (3 days)
+    ttl: 3 * 24 * 60 * 60 * 1000,
+  },
+);
+
+const hateSpeechClassificationCache = new LRUCache(
+  {
+    max: 200000,
     // how long to live in ms (3 days)
     ttl: 3 * 24 * 60 * 60 * 1000,
   },
@@ -268,6 +277,8 @@ const allClassificationDataFetcher = async (sinceHoursAgoToCheck: number = 24, u
       CLASSIFICATION_EVENT_KIND, NOSTR_MONITORING_BOT_PUBLIC_KEY, NSFW_CLASSIFICATION_D_TAG, sinceHoursAgoToCheck, untilHoursAgoToCheck));
     promiseList.push(classificationDataFetcher(
       CLASSIFICATION_EVENT_KIND, NOSTR_MONITORING_BOT_PUBLIC_KEY, LANGUAGE_CLASSIFICATION_D_TAG, sinceHoursAgoToCheck, untilHoursAgoToCheck));
+    promiseList.push(classificationDataFetcher(
+      CLASSIFICATION_EVENT_KIND, NOSTR_MONITORING_BOT_PUBLIC_KEY, HATE_SPEECH_CLASSIFICATION_D_TAG, sinceHoursAgoToCheck, untilHoursAgoToCheck));
 
     const joinResultRaw = await Promise.allSettled(promiseList);
 
@@ -304,6 +315,10 @@ async function fetchClassificationDataHistory(
         if (languageClassificationCache.has(eventId)) break;
         languageClassificationCache.set(eventId, JSON.parse(classification.content));
         break;
+      case HATE_SPEECH_CLASSIFICATION_D_TAG:
+        if (hateSpeechClassificationCache.has(eventId)) break;
+        hateSpeechClassificationCache.set(eventId, JSON.parse(classification.content));
+        break;
       default:
         break;
     }
@@ -321,7 +336,7 @@ async function subscribeClassificationDataHistory() {
       {
         kinds: [CLASSIFICATION_EVENT_KIND],
         "authors": [NOSTR_MONITORING_BOT_PUBLIC_KEY],
-        "#d": [NSFW_CLASSIFICATION_D_TAG, LANGUAGE_CLASSIFICATION_D_TAG],
+        "#d": [NSFW_CLASSIFICATION_D_TAG, LANGUAGE_CLASSIFICATION_D_TAG, HATE_SPEECH_CLASSIFICATION_D_TAG],
       },
     ],
     {
@@ -355,6 +370,10 @@ async function subscribeClassificationDataHistory() {
           if (languageClassificationCache.has(eventId)) break;
           languageClassificationCache.set(eventId, classificationData);
           break;
+        case HATE_SPEECH_CLASSIFICATION_D_TAG:
+          if (hateSpeechClassificationCache.has(eventId)) break;
+          hateSpeechClassificationCache.set(eventId, classificationData);
+          break;
         default:
           break;
       }
@@ -375,7 +394,8 @@ async function listen(): Promise<void> {
   console.info("ClassificationCache after initial data");
   console.info("nsfwClassificationCache.size", nsfwClassificationCache.size);
   console.info("languageClassificationCache.size", languageClassificationCache.size);
-  console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size);
+  console.info("hateSpeechClassificationCache.size", hateSpeechClassificationCache.size);
+  console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size + hateSpeechClassificationCache.size);
 
   // Fetch longer time range data in the background (maximum for 3 days)
   (async () => {
@@ -383,17 +403,20 @@ async function listen(): Promise<void> {
     console.info("ClassificationCache after fetching", sinceHoursAgoToCheck, untilHoursAgoToCheck);
     console.info("nsfwClassificationCache.size", nsfwClassificationCache.size);
     console.info("languageClassificationCache.size", languageClassificationCache.size);
-    console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size);
+    console.info("hateSpeechClassificationCache.size", hateSpeechClassificationCache.size);
+    console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size + hateSpeechClassificationCache.size);
     await fetchClassificationDataHistory(sinceHoursAgoToCheck * 2, sinceHoursAgoToCheck);
     console.info("ClassificationCache after fetching", sinceHoursAgoToCheck * 2, sinceHoursAgoToCheck);
     console.info("nsfwClassificationCache.size", nsfwClassificationCache.size);
     console.info("languageClassificationCache.size", languageClassificationCache.size);
-    console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size);
+    console.info("hateSpeechClassificationCache.size", hateSpeechClassificationCache.size);
+    console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size + hateSpeechClassificationCache.size);
     await fetchClassificationDataHistory(sinceHoursAgoToCheck * 3, sinceHoursAgoToCheck * 2);
     console.info("ClassificationCache after fetching", sinceHoursAgoToCheck * 3, sinceHoursAgoToCheck * 2);
     console.info("nsfwClassificationCache.size", nsfwClassificationCache.size);
     console.info("languageClassificationCache.size", languageClassificationCache.size);
-    console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size);
+    console.info("hateSpeechClassificationCache.size", hateSpeechClassificationCache.size);
+    console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size + hateSpeechClassificationCache.size);
   })();
 
   const fetchEndTime = performance.now();
@@ -1046,6 +1069,20 @@ async function listen(): Promise<void> {
               languageConfidenceThresold < 0 || languageConfidenceThresold > 100
               ? 15
               : languageConfidenceThresold;
+
+            // Filter hate speech (toxic content) configurations
+            let filterHateSpeechContentMode = searchParams.get("toxic") ?? "no";
+            let validFilterHateSpeechContentMode = ["all", "yes", "no"];
+            let hateSpeechContentConfidenceThresold = parseInt(
+              searchParams.get("toxic_confidence") ?? "75",
+            );
+            hateSpeechContentConfidenceThresold = Number.isNaN(hateSpeechContentConfidenceThresold) ||
+              hateSpeechContentConfidenceThresold < 0 || hateSpeechContentConfidenceThresold > 100
+              ? 75 / 100
+              : hateSpeechContentConfidenceThresold / 100;
+            let filterHateSpeechContentEvalMode = searchParams.get("toxic_eval") ?? "max";
+            let validFilterHateSpeechContentEvalMode = ["max", "sum"];
+
             let filterUserMode = searchParams.get("user") ?? "all";
             let validFilterUserMode = ["all", "nostr", "activitypub"];
             const contentWarningExist = hasContentWarning(event[2].tags ?? []);
@@ -1185,6 +1222,60 @@ async function listen(): Promise<void> {
                 shouldRelay = false;
                 because = "Does not have target language: " + filterLanguageMode.join(", ");
               }
+            }
+
+            // Check hate speech (toxic content) classification results
+            let cachedHateSpeechClassificationCache: any;
+            if (hateSpeechClassificationCache.has(eventId)) {
+              cachedHateSpeechClassificationCache = hateSpeechClassificationCache.get(eventId) ?? [];
+            }
+
+            let isProbablyHateSpeech = false;
+            if (cachedHateSpeechClassificationCache) {
+              // Get maximum probability of all classification label
+              const maxScoreHateSpeechDetection = Math.max(...Object.values(cachedHateSpeechClassificationCache)
+                .map((score: any) => parseFloat(score)));
+
+              // Get sum probability of all classification label
+              let sumScoreHateSpeechDetection = Object.values(cachedHateSpeechClassificationCache)
+                .map((score: any) => parseFloat(score))
+                .reduce((a, b) => a + b, 0)
+              sumScoreHateSpeechDetection = (sumScoreHateSpeechDetection >= 1) ? 0.99999999999 : sumScoreHateSpeechDetection;
+
+              switch (filterHateSpeechContentEvalMode) {
+                case 'sum':
+                  isProbablyHateSpeech = sumScoreHateSpeechDetection >= hateSpeechContentConfidenceThresold;
+                  break;
+                default:
+                  isProbablyHateSpeech = maxScoreHateSpeechDetection >= hateSpeechContentConfidenceThresold;
+                  break;
+              }
+            }
+
+            switch (filterHateSpeechContentMode) {
+              case "no":
+                if (!shouldRelay) break;
+
+                // Don't filter if parameter: content=all
+                if(filterContentMode === 'all') break;
+
+                // Don't filter if parameter: content=partialsfw and it has content warning or nsfw hashtag
+                if(filterContentMode === 'partialsfw') {
+                  if (contentWarningExist || nsfwHashtagExist) break;
+                }
+
+                // Accept as long as it is not probably hate speech
+                shouldRelay = !isProbablyHateSpeech;
+                if (!shouldRelay) because = "Non hate speech (toxic content) only filtered";
+                break;
+              case "yes":
+                if (!shouldRelay) break;
+                // Accept as long as it is probably hate speech
+                shouldRelay = isProbablyHateSpeech;
+                if (!shouldRelay) because = "Hate speech (Toxic content) only filtered";
+                break;
+              default:
+                break;
             }
 
             let activityPubUser = isActivityPubUser(event[2].tags ?? []);
