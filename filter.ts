@@ -87,6 +87,16 @@ const hateSpeechClassificationCache = new LRUCache(
   },
 );
 
+// Default constant variable specific for atrifat/nostr-filter fork. Basic explanations are provided in .env.sample 
+const DEFAULT_FILTER_CONTENT_MODE = process.env.DEFAULT_FILTER_CONTENT_MODE || 'sfw';
+const DEFAULT_FILTER_NSFW_CONFIDENCE = process.env.DEFAULT_FILTER_NSFW_CONFIDENCE || '75';
+const DEFAULT_FILTER_LANGUAGE_MODE = process.env.DEFAULT_FILTER_LANGUAGE_MODE || 'all';
+const DEFAULT_FILTER_LANGUAGE_CONFIDENCE = process.env.DEFAULT_FILTER_LANGUAGE_CONFIDENCE || '15';
+const DEFAULT_FILTER_HATE_SPEECH_TOXIC_MODE = process.env.DEFAULT_FILTER_HATE_SPEECH_TOXIC_MODE || 'no';
+const DEFAULT_FILTER_HATE_SPEECH_TOXIC_CONFIDENCE = process.env.DEFAULT_FILTER_HATE_SPEECH_TOXIC_CONFIDENCE || '75';
+const DEFAULT_FILTER_HATE_SPEECH_TOXIC_EVALUATION_MODE = process.env.DEFAULT_FILTER_HATE_SPEECH_TOXIC_EVALUATION_MODE || 'max';
+const DEFAULT_FILTER_USER_MODE = process.env.DEFAULT_FILTER_USER_MODE || 'all';
+
 // 書き込み用の上流リレーとの接続(あらかじめ接続しておいて、WS接続直後のイベントでも取りこぼしを防ぐため)
 let upstreamWriteSocket = new WebSocket(upstreamWsUrl);
 
@@ -1049,10 +1059,10 @@ async function listen(): Promise<void> {
             let isNsfw = false;
 
             // Filter content (NSFW/SFW) configurations
-            let filterContentMode = searchParams.get("content") ?? "sfw";
+            let filterContentMode = searchParams.get("content") ?? DEFAULT_FILTER_CONTENT_MODE;
             let validFilterContentMode = ["all", "sfw", "partialsfw", "nsfw"];
             let nsfwConfidenceThresold = parseInt(
-              searchParams.get("nsfw_confidence") ?? "75",
+              searchParams.get("nsfw_confidence") ?? DEFAULT_FILTER_NSFW_CONFIDENCE,
             );
             nsfwConfidenceThresold = Number.isNaN(nsfwConfidenceThresold) ||
               nsfwConfidenceThresold < 0 || nsfwConfidenceThresold > 100
@@ -1060,10 +1070,10 @@ async function listen(): Promise<void> {
               : nsfwConfidenceThresold / 100;
 
             // Filter language configurations
-            let filterLanguageModeString = searchParams.get("lang") ?? "all";
+            let filterLanguageModeString = searchParams.get("lang") ?? DEFAULT_FILTER_LANGUAGE_MODE;
             let filterLanguageMode = filterLanguageModeString.split(",").map(lang => lang.trim());
             let languageConfidenceThresold = parseInt(
-              searchParams.get("lang_confidence") ?? "15",
+              searchParams.get("lang_confidence") ?? DEFAULT_FILTER_LANGUAGE_CONFIDENCE,
             );
             languageConfidenceThresold = Number.isNaN(languageConfidenceThresold) ||
               languageConfidenceThresold < 0 || languageConfidenceThresold > 100
@@ -1071,19 +1081,19 @@ async function listen(): Promise<void> {
               : languageConfidenceThresold;
 
             // Filter hate speech (toxic content) configurations
-            let filterHateSpeechContentMode = searchParams.get("toxic") ?? "no";
+            let filterHateSpeechContentMode = searchParams.get("toxic") ?? DEFAULT_FILTER_HATE_SPEECH_TOXIC_MODE;
             let validFilterHateSpeechContentMode = ["all", "yes", "no"];
             let hateSpeechContentConfidenceThresold = parseInt(
-              searchParams.get("toxic_confidence") ?? "75",
+              searchParams.get("toxic_confidence") ?? DEFAULT_FILTER_HATE_SPEECH_TOXIC_CONFIDENCE,
             );
             hateSpeechContentConfidenceThresold = Number.isNaN(hateSpeechContentConfidenceThresold) ||
               hateSpeechContentConfidenceThresold < 0 || hateSpeechContentConfidenceThresold > 100
               ? 75 / 100
               : hateSpeechContentConfidenceThresold / 100;
-            let filterHateSpeechContentEvalMode = searchParams.get("toxic_eval") ?? "max";
+            let filterHateSpeechContentEvalMode = searchParams.get("toxic_eval") ?? DEFAULT_FILTER_HATE_SPEECH_TOXIC_EVALUATION_MODE;
             let validFilterHateSpeechContentEvalMode = ["max", "sum"];
 
-            let filterUserMode = searchParams.get("user") ?? "all";
+            let filterUserMode = searchParams.get("user") ?? DEFAULT_FILTER_USER_MODE;
             let validFilterUserMode = ["all", "nostr", "activitypub"];
             const contentWarningExist = hasContentWarning(event[2].tags ?? []);
             const nsfwHashtagExist = hasNsfwHashtag(
