@@ -2,6 +2,17 @@
 
 Nostr-filter is a user-friendly filtering program designed to improve the management of your Nostr relay server. This program enables you to easily filter out undesired events, block specific users, and limit access from certain IP addresses or ranges. By employing regular expressions for content filtering, a list of public keys for user blocking, and a list of CIDR notations for IP address filtering, you can effortlessly tailor the settings to your preferences and ensure a smooth and optimized experience for your Nostr relay users.
 
+## Fork Differences and Features
+
+[atrifat/nostr-filter](https://github.com/atrifat/nostr-filter) is a custom fork of [imksoo/nostr-filter](https://github.com/imksoo/nostr-filter) which focuses on additional filtering features using [atrifat/nostr-monitoring-tool](https://github.com/atrifat/nostr-monitoring-tool) data such as:
+
+- Language filtering
+- SFW/NSFW Content filtering
+- Hate speech (Toxic Comments) filtering
+- and other features listed in [atrifat/nostr-monitoring-tool](https://github.com/atrifat/nostr-monitoring-tool)
+
+[atrifat/nostr-filter](https://github.com/atrifat/nostr-filter) is also main component of [atrifat/nostr-filter-relay](https://github.com/atrifat/nostr-filter-relay) which act as frontend proxy filter relay.
+
 ## Installation
 
 To run `nostr-filter`, you need to have Docker and Docker Compose installed.
