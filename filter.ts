@@ -692,14 +692,12 @@ async function listen(): Promise<void> {
           }
 
           // Allow write any event only for whitelisted pubkeys in downstream messages
-          for (const allowed of whitelistedPubkeys) {
-            if (event[1].pubkey !== allowed) {
+          if (shouldRelay && whitelistedPubkeys.length > 0) {
+            const isWhitelistPubkey = whitelistedPubkeys.includes(event[1].pubkey);
+
+            if (!isWhitelistPubkey) {
               shouldRelay = false;
               because = "Only whitelisted pubkey can write events";
-              // break;
-            } else {
-              shouldRelay = true;
-              because = "";
             }
           }
 
