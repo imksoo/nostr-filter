@@ -17,7 +17,7 @@ if (NODE_ENV === "production") {
 
   };
   console.debug = (...data) => {
-  
+
   };
 }
 const listenPort: number = parseInt(process.env.LISTEN_PORT ?? "8081"); // クライアントからのWebSocket待ち受けポート
@@ -29,64 +29,41 @@ const upstreamWsUrl: string = process.env.UPSTREAM_WS_URL ??
 // 書き込み用の上流リレーとの接続(あらかじめ接続しておいて、WS接続直後のイベントでも取りこぼしを防ぐため)
 let upstreamWriteSocket = new WebSocket(upstreamWsUrl);
 
-console.info(JSON.stringify({ msg: "process.env", ...process.env }));
-console.info(
-  JSON.stringify({
-    msg: "configs",
-    listenPort,
-    upstreamHttpUrl,
-    upstreamWsUrl,
-  }),
-);
-
 // NostrのEvent contentsのフィルタリング用正規表現パターンの配列
-const contentFilters: RegExp[] = [
-  /avive/i,
-  /web3/i,
-  /lnbc/,
-  /t\.me/,
-  /nostr-vip\.top/,
-  /1C-0OTP4DRCWJY17XvOHO/,
-  /\$GPT/,
-  /Claim your free/,
-  /Claim Free/i,
-  /shop\.55uu\.wang/,
-  /dosoos/i,
-  /coderba/i,
-  /人工智能/,
-  /dapp/,
-  /motherfuckers/,
-  /shitspaming/,
-  /telegra\.ph/,
-  /幼女爱好/,
-];
+const contentFilters: RegExp[] = Object.keys(process.env)
+  .filter(key => key.startsWith('MUTE_FILTER_'))
+  .map(key => {
+    const pattern = process.env[key]!;
+    const match = pattern.match(/^\/(.+)\/([gimy]*)$/);
+    if (!match) {
+      return new RegExp(pattern);
+    } else {
+      return new RegExp(match[1], match[2]);
+    }
+  });
+
+console.info(JSON.stringify({ msg: "process.env", ...process.env }));
 
 // ブロックするユーザーの公開鍵の配列
 const blockedPubkeys: string[] =
-  (typeof process.env.BLOCKED_PUBKEYS !== "undefined"  && process.env.BLOCKED_PUBKEYS !== "")
+  (typeof process.env.BLOCKED_PUBKEYS !== "undefined" && process.env.BLOCKED_PUBKEYS !== "")
     ? process.env.BLOCKED_PUBKEYS.split(",").map((pubkey) => pubkey.trim())
     : [];
 // Allow only whitelisted pubkey to write events
 const whitelistedPubkeys: string[] =
   (typeof process.env.WHITELISTED_PUBKEYS !== "undefined" &&
-      process.env.WHITELISTED_PUBKEYS !== "")
+    process.env.WHITELISTED_PUBKEYS !== "")
     ? process.env.WHITELISTED_PUBKEYS.split(",").map((pubkey) => pubkey.trim())
     : [];
 // Filter proxy events
 const filterProxyEvents = process.env.FILTER_PROXY_EVENTS === "true";
+// Forward request headers to upstream
+const enableForwardReqHeaders = process.env.ENABLE_FORWARD_REQ_HEADERS === "true";
 
 // クライアントIPアドレスのCIDRフィルタ
-const cidrRanges: string[] = [
-  "43.205.189.224/32",
-  "34.173.202.51/32",
-  "129.205.113.128/25",
-  "180.97.221.192/32",
-  "62.197.152.37/32",
-  "157.230.17.234/32",
-  "185.25.224.220/32",
-  "35.231.153.85/32",
-  "103.135.251.248/32",
-];
+const cidrRanges: string[] = Object.keys(process.env)
+  .filter(key => key.startsWith('BLOCKED_IP_ADDR_'))
+  .map(key => (process.env[key]!));
 
 // CIDRマッチ用のフィルタ関数
 function ipMatchesCidr(ip: string, cidr: string): boolean {
@@ -106,10 +83,9 @@ function ipMatchesCidr(ip: string, cidr: string): boolean {
     const ipNum = BigInt(`0x${ip.replace(/:/g, "")}`);
     const rangeNum = BigInt(`0x${range.replace(/:/g, "")}`);
     const mask6 = BigInt(
-      `0x${"f".repeat(32 - parseInt(bits, 10))}${
-        "0".repeat(
-          parseInt(bits, 10),
-        )
+      `0x${"f".repeat(32 - parseInt(bits, 10))}${"0".repeat(
+        parseInt(bits, 10),
+      )
       }`,
     );
 
@@ -118,6 +94,17 @@ function ipMatchesCidr(ip: string, cidr: string): boolean {
 
   return false;
 }
+
+console.info(
+  JSON.stringify({
+    msg: "configs",
+    listenPort,
+    upstreamHttpUrl,
+    upstreamWsUrl,
+    contentFilters: contentFilters.map(regex => `/${regex.source}/${regex.flags}`),
+    blockedIPAddresses: cidrRanges,
+  }),
+);
 
 // 全体の接続数
 let connectionCount = 0;
@@ -222,8 +209,12 @@ function listen(): void {
       // ソケットごとにユニークなIDを付与
       const socketId = uuidv4();
 
+      // Check whether we want to forward original request headers to the upstream server
+      // This will be useful if the upstream server need original request headers to do operations like rate-limiting, etc.
+      let wsClientOptions = enableForwardReqHeaders ? { headers: req.headers } : undefined;
+
       // 上流となるリレーサーバーと接続
-      let upstreamSocket = new WebSocket(upstreamWsUrl);
+      let upstreamSocket = new WebSocket(upstreamWsUrl, wsClientOptions);
       connectUpstream(upstreamSocket, downstreamSocket);
 
       // クライアントとの接続が確立したら、アイドルタイムアウトを設定
@@ -400,14 +391,12 @@ function listen(): void {
           }
 
           // Allow write any event only for whitelisted pubkeys in downstream messages
-          for (const allowed of whitelistedPubkeys) {
-            if (event[1].pubkey !== allowed) {
+          if (shouldRelay && whitelistedPubkeys.length > 0) {
+            const isWhitelistPubkey = whitelistedPubkeys.includes(event[1].pubkey);
+
+            if (!isWhitelistPubkey) {
               shouldRelay = false;
               because = "Only whitelisted pubkey can write events";
-              // break;
-            } else {
-              shouldRelay = true;
-              because = "";
             }
           }
 
@@ -492,7 +481,7 @@ function listen(): void {
               message: event,
             }),
           );
-          
+
           if (event[0] === "INVALID") {
             shouldRelay = false;
             because = event[1];
