@@ -119,7 +119,7 @@ function loggingMemoryUsage(): void {
   const usedHeapSize = Math.round(memoryUsage.heapUsed / 1024 / 1024);
   const totalHeapSize = Math.round(memoryUsage.heapTotal / 1024 / 1024);
   const rssSize = Math.round(memoryUsage.rss / 1024 / 1024);
-  console.info(
+  console.debug(
     JSON.stringify({
       msg: "memoryUsage",
       currentTime,
@@ -134,7 +134,7 @@ function loggingMemoryUsage(): void {
 loggingMemoryUsage(); // 起動時のヒープ状態を出力
 setInterval(() => {
   loggingMemoryUsage();
-}, 1 * 60 * 1000); // ヒープ状態を1分ごとに実行
+}, 10 * 60 * 1000); // ヒープ状態を1分ごとに実行
 
 function listen(): void {
   console.info(JSON.stringify({ msg: "Started", listenPort }));
@@ -402,7 +402,7 @@ function listen(): void {
 
           // イベント内容とフィルターの判定結果をコンソールにログ出力
           if (shouldRelay) {
-            console.log(
+            console.info(
               JSON.stringify({
                 msg: "EVENT",
                 ip,
@@ -413,7 +413,7 @@ function listen(): void {
               }),
             );
           } else {
-            console.log(
+            console.info(
               JSON.stringify({
                 msg: "EVENT BLOCKED",
                 because,
