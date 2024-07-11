@@ -55,6 +55,7 @@ const CLASSIFICATION_EVENT_KIND = 9978;
 const NSFW_CLASSIFICATION_D_TAG = "nostr-nsfw-classification";
 const LANGUAGE_CLASSIFICATION_D_TAG = "nostr-language-classification";
 const HATE_SPEECH_CLASSIFICATION_D_TAG = "nostr-hate-speech-classification";
+const SENTIMENT_CLASSIFICATION_D_TAG = "nostr-sentiment-classification";
 
 const pool = new SimplePool();
 const fetcherNonPool = NostrFetcher.init();
@@ -87,6 +88,14 @@ const hateSpeechClassificationCache = new LRUCache(
   },
 );
 
+const sentimentClassificationCache = new LRUCache(
+  {
+    max: 500000,
+    // how long to live in ms (3 days)
+    ttl: 3 * 24 * 60 * 60 * 1000,
+  },
+);
+
 // Default constant variable specific for atrifat/nostr-filter fork. Basic explanations are provided in .env.sample 
 const DEFAULT_FILTER_CONTENT_MODE = process.env.DEFAULT_FILTER_CONTENT_MODE || 'sfw';
 const DEFAULT_FILTER_NSFW_CONFIDENCE = process.env.DEFAULT_FILTER_NSFW_CONFIDENCE || '75';
@@ -95,6 +104,8 @@ const DEFAULT_FILTER_LANGUAGE_CONFIDENCE = process.env.DEFAULT_FILTER_LANGUAGE_C
 const DEFAULT_FILTER_HATE_SPEECH_TOXIC_MODE = process.env.DEFAULT_FILTER_HATE_SPEECH_TOXIC_MODE || 'no';
 const DEFAULT_FILTER_HATE_SPEECH_TOXIC_CONFIDENCE = process.env.DEFAULT_FILTER_HATE_SPEECH_TOXIC_CONFIDENCE || '75';
 const DEFAULT_FILTER_HATE_SPEECH_TOXIC_EVALUATION_MODE = process.env.DEFAULT_FILTER_HATE_SPEECH_TOXIC_EVALUATION_MODE || 'max';
+const DEFAULT_FILTER_SENTIMENT_MODE = process.env.DEFAULT_FILTER_SENTIMENT_MODE || 'all';
+const DEFAULT_FILTER_SENTIMENT_CONFIDENCE = process.env.DEFAULT_FILTER_SENTIMENT_CONFIDENCE || '35';
 const DEFAULT_FILTER_USER_MODE = process.env.DEFAULT_FILTER_USER_MODE || 'all';
 
 // 書き込み用の上流リレーとの接続(あらかじめ接続しておいて、WS接続直後のイベントでも取りこぼしを防ぐため)
@@ -289,6 +300,8 @@ const allClassificationDataFetcher = async (sinceHoursAgoToCheck: number = 24, u
       CLASSIFICATION_EVENT_KIND, NOSTR_MONITORING_BOT_PUBLIC_KEY, LANGUAGE_CLASSIFICATION_D_TAG, sinceHoursAgoToCheck, untilHoursAgoToCheck));
     promiseList.push(classificationDataFetcher(
       CLASSIFICATION_EVENT_KIND, NOSTR_MONITORING_BOT_PUBLIC_KEY, HATE_SPEECH_CLASSIFICATION_D_TAG, sinceHoursAgoToCheck, untilHoursAgoToCheck));
+    promiseList.push(classificationDataFetcher(
+      CLASSIFICATION_EVENT_KIND, NOSTR_MONITORING_BOT_PUBLIC_KEY, SENTIMENT_CLASSIFICATION_D_TAG, sinceHoursAgoToCheck, untilHoursAgoToCheck));
 
     const joinResultRaw = await Promise.allSettled(promiseList);
 
@@ -329,6 +342,10 @@ async function fetchClassificationDataHistory(
         if (hateSpeechClassificationCache.has(eventId)) break;
         hateSpeechClassificationCache.set(eventId, JSON.parse(classification.content));
         break;
+      case SENTIMENT_CLASSIFICATION_D_TAG:
+        if (sentimentClassificationCache.has(eventId)) break;
+        sentimentClassificationCache.set(eventId, JSON.parse(classification.content));
+        break;
       default:
         break;
     }
@@ -346,7 +363,7 @@ async function subscribeClassificationDataHistory() {
       {
         kinds: [CLASSIFICATION_EVENT_KIND],
         "authors": [NOSTR_MONITORING_BOT_PUBLIC_KEY],
-        "#d": [NSFW_CLASSIFICATION_D_TAG, LANGUAGE_CLASSIFICATION_D_TAG, HATE_SPEECH_CLASSIFICATION_D_TAG],
+        "#d": [NSFW_CLASSIFICATION_D_TAG, LANGUAGE_CLASSIFICATION_D_TAG, HATE_SPEECH_CLASSIFICATION_D_TAG, SENTIMENT_CLASSIFICATION_D_TAG],
       },
     ],
     {
@@ -384,6 +401,10 @@ async function subscribeClassificationDataHistory() {
           if (hateSpeechClassificationCache.has(eventId)) break;
           hateSpeechClassificationCache.set(eventId, classificationData);
           break;
+        case SENTIMENT_CLASSIFICATION_D_TAG:
+          if (sentimentClassificationCache.has(eventId)) break;
+          sentimentClassificationCache.set(eventId, classificationData);
+          break;
         default:
           break;
       }
@@ -405,7 +426,8 @@ async function listen(): Promise<void> {
   console.info("nsfwClassificationCache.size", nsfwClassificationCache.size);
   console.info("languageClassificationCache.size", languageClassificationCache.size);
   console.info("hateSpeechClassificationCache.size", hateSpeechClassificationCache.size);
-  console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size + hateSpeechClassificationCache.size);
+  console.info("sentimentClassificationCache.size", sentimentClassificationCache.size);
+  console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size + hateSpeechClassificationCache.size + sentimentClassificationCache.size);
 
   // Fetch longer time range data in the background (maximum for 3 days)
   (async () => {
@@ -414,19 +436,22 @@ async function listen(): Promise<void> {
     console.info("nsfwClassificationCache.size", nsfwClassificationCache.size);
     console.info("languageClassificationCache.size", languageClassificationCache.size);
     console.info("hateSpeechClassificationCache.size", hateSpeechClassificationCache.size);
-    console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size + hateSpeechClassificationCache.size);
+    console.info("sentimentClassificationCache.size", sentimentClassificationCache.size);
+    console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size + hateSpeechClassificationCache.size + sentimentClassificationCache.size);
     await fetchClassificationDataHistory(sinceHoursAgoToCheck * 2, sinceHoursAgoToCheck);
     console.info("ClassificationCache after fetching", sinceHoursAgoToCheck * 2, sinceHoursAgoToCheck);
     console.info("nsfwClassificationCache.size", nsfwClassificationCache.size);
     console.info("languageClassificationCache.size", languageClassificationCache.size);
     console.info("hateSpeechClassificationCache.size", hateSpeechClassificationCache.size);
-    console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size + hateSpeechClassificationCache.size);
+    console.info("sentimentClassificationCache.size", sentimentClassificationCache.size);
+    console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size + hateSpeechClassificationCache.size + sentimentClassificationCache.size);
     await fetchClassificationDataHistory(sinceHoursAgoToCheck * 3, sinceHoursAgoToCheck * 2);
     console.info("ClassificationCache after fetching", sinceHoursAgoToCheck * 3, sinceHoursAgoToCheck * 2);
     console.info("nsfwClassificationCache.size", nsfwClassificationCache.size);
     console.info("languageClassificationCache.size", languageClassificationCache.size);
     console.info("hateSpeechClassificationCache.size", hateSpeechClassificationCache.size);
-    console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size + hateSpeechClassificationCache.size);
+    console.info("sentimentClassificationCache.size", sentimentClassificationCache.size);
+    console.info("ClassificationCache.size", nsfwClassificationCache.size + languageClassificationCache.size + hateSpeechClassificationCache.size + sentimentClassificationCache.size);
   })();
 
   const fetchEndTime = performance.now();
@@ -1091,6 +1116,17 @@ async function listen(): Promise<void> {
             let filterHateSpeechContentEvalMode = searchParams.get("toxic_eval") ?? DEFAULT_FILTER_HATE_SPEECH_TOXIC_EVALUATION_MODE;
             let validFilterHateSpeechContentEvalMode = ["max", "sum"];
 
+            // Filter sentiment configurations
+            let filterSentimentModeString = searchParams.get("sentiment") ?? DEFAULT_FILTER_SENTIMENT_MODE;
+            let filterSentimentMode = filterSentimentModeString.split(",").map(sentiment => sentiment.trim().toLowerCase());
+            let sentimentConfidenceThresold = parseInt(
+              searchParams.get("sentiment_confidence") ?? DEFAULT_FILTER_SENTIMENT_CONFIDENCE,
+            );
+            sentimentConfidenceThresold = Number.isNaN(sentimentConfidenceThresold) ||
+              sentimentConfidenceThresold < 0 || sentimentConfidenceThresold > 100
+              ? 35 / 100
+              : sentimentConfidenceThresold / 100;
+
             let filterUserMode = searchParams.get("user") ?? DEFAULT_FILTER_USER_MODE;
             let validFilterUserMode = ["all", "nostr", "activitypub"];
             const contentWarningExist = hasContentWarning(event[2].tags ?? []);
@@ -1265,10 +1301,10 @@ async function listen(): Promise<void> {
                 if (!shouldRelay) break;
 
                 // Don't filter if parameter: content=all
-                if(filterContentMode === 'all') break;
+                if (filterContentMode === 'all') break;
 
                 // Don't filter if parameter: content=partialsfw and it has content warning or nsfw hashtag
-                if(filterContentMode === 'partialsfw') {
+                if (filterContentMode === 'partialsfw') {
                   if (contentWarningExist || nsfwHashtagExist) break;
                 }
 
@@ -1284,6 +1320,36 @@ async function listen(): Promise<void> {
                 break;
               default:
                 break;
+            }
+
+            // Check sentiment classification results
+            let cachedSentimentClassificationCache: any = sentimentClassificationCache.get(eventId);
+
+            if (!filterSentimentMode.includes("all")) {
+              // filter based on sentiment
+              const sentimentRulesFilter = function (
+                classification: any,
+                filterSentimentMode: string[],
+                sentimentConfidenceThresold: number = 35,
+              ): boolean {
+                let result = false;
+                for (const label in classification) {
+                  const hasProbablyTargetSentiment = filterSentimentMode.includes(label);
+                  const highConfidence = parseFloat(classification[label] ?? 0.0) >= sentimentConfidenceThresold;
+                  if (hasProbablyTargetSentiment && highConfidence) {
+                    result = true;
+                    break;
+                  }
+                }
+                return result;
+              };
+
+              const hasTargetSentiment = sentimentRulesFilter(cachedSentimentClassificationCache, filterSentimentMode, sentimentConfidenceThresold);
+
+              if (!hasTargetSentiment && shouldRelay) {
+                shouldRelay = false;
+                because = "Does not have target sentiment: " + filterSentimentMode.join(", ");
+              }
             }
 
             let activityPubUser = isActivityPubUser(event[2].tags ?? []);
