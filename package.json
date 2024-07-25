@@ -17,7 +17,7 @@
     "mime-types": "^2.1.35",
     "typescript": "^5.0.2",
     "uuid": "^9.0.0",
-    "ws": "^8.13.0"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^18.15.3",
