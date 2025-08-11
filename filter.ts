@@ -25,9 +25,11 @@ const upstreamHttpUrl: string = process.env.UPSTREAM_HTTP_URL ??
   "http://localhost:8080"; // 上流のWebSocketサーバのURL
 const upstreamWsUrl: string = process.env.UPSTREAM_WS_URL ??
   "ws://localhost:8080"; // 上流のWebSocketサーバのURL
+const upstreamWsForFastBotUrl: string = process.env.UPSTREAM_WS_FOR_FAST_BOT_URL ??
+  "ws://localhost:8080"; // 上流のWebSocketサーバのURL
 
 // 書き込み用の上流リレーとの接続(あらかじめ接続しておいて、WS接続直後のイベントでも取りこぼしを防ぐため)
-let upstreamWriteSocket = new WebSocket(upstreamWsUrl);
+let upstreamWriteSocket = new WebSocket(upstreamWsForFastBotUrl);
 
 // NostrのEvent contentsのフィルタリング用正規表現パターンの配列
 const contentFilters: RegExp[] = Object.keys(process.env)
@@ -103,6 +105,7 @@ console.info(
     listenPort,
     upstreamHttpUrl,
     upstreamWsUrl,
+    upstreamWsForFastBotUrl,
     contentFilters: contentFilters.map(regex => `/${regex.source}/${regex.flags}`),
     blockedIPAddresses: cidrRanges,
   }),
