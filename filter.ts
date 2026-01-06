@@ -213,6 +213,18 @@ function listen(): void {
 
       // ソケットごとにユニークなIDを付与
       const socketId = uuidv7();
+      const connectionStartTime = new Date();
+      const connectionStartTimeISO = connectionStartTime.toISOString();
+      const elapsedMs = (): number =>
+        Date.now() - connectionStartTime.getTime();
+      const withTiming = (
+        payload: Record<string, unknown>,
+        includeElapsed: boolean = true,
+      ): Record<string, unknown> => ({
+        ...payload,
+        connectionStartTime: connectionStartTimeISO,
+        ...(includeElapsed ? { elapsedMs: elapsedMs() } : {}),
+      });
 
       // Check whether we want to forward original request headers to the upstream server
       // This will be useful if the upstream server need original request headers to do operations like rate-limiting, etc.
@@ -263,27 +275,31 @@ function listen(): void {
         const because = "Blocked by CIDR filter";
         // IPアドレスがCIDR範囲内にある場合、接続を拒否
         console.warn(
-          JSON.stringify({
-            msg: "CONNECTING BLOCKED",
-            because,
-            ip,
-            port,
-            socketId,
-          }),
+          JSON.stringify(
+            withTiming({
+              msg: "CONNECTING BLOCKED",
+              because,
+              ip,
+              port,
+              socketId,
+            }),
+          ),
         );
         const blockedMessage = JSON.stringify([
           "NOTICE",
           `blocked: ${because}`,
         ]);
         console.log(
-          JSON.stringify({
-            msg: "BLOCKED NOTICE",
-            ip,
-            port,
-            socketId,
-            because,
-            blockedMessage,
-          }),
+          JSON.stringify(
+            withTiming({
+              msg: "BLOCKED NOTICE",
+              ip,
+              port,
+              socketId,
+              because,
+              blockedMessage,
+            }),
+          ),
         );
         upstreamSocket.close();
         downstreamSocket.send(blockedMessage);
@@ -299,29 +315,33 @@ function listen(): void {
       if (connectionCountForIP > 100) {
         const because = "Blocked by too many connections";
         console.warn(
-          JSON.stringify({
-            msg: "CONNECTING BLOCKED",
-            because,
-            ip,
-            port,
-            socketId,
-            connectionCountForIP,
-          }),
+          JSON.stringify(
+            withTiming({
+              msg: "CONNECTING BLOCKED",
+              because,
+              ip,
+              port,
+              socketId,
+              connectionCountForIP,
+            }),
+          ),
         );
         const blockedMessage = JSON.stringify([
           "NOTICE",
           `blocked: ${because}`,
         ]);
         console.log(
-          JSON.stringify({
-            msg: "BLOCKED NOTICE",
-            ip,
-            port,
-            socketId,
-            connectionCountForIP,
-            because,
-            blockedMessage,
-          }),
+          JSON.stringify(
+            withTiming({
+              msg: "BLOCKED NOTICE",
+              ip,
+              port,
+              socketId,
+              connectionCountForIP,
+              because,
+              blockedMessage,
+            }),
+          ),
         );
         upstreamSocket.close();
         downstreamSocket.send(blockedMessage);
@@ -329,14 +349,16 @@ function listen(): void {
         return;
       } else {
         console.info(
-          JSON.stringify({
-            msg: "CONNECTED",
-            ip,
-            port,
-            socketId,
-            connectionCountForIP,
-            headers: req.headers,
-          }),
+          JSON.stringify(
+            withTiming({
+              msg: "CONNECTED",
+              ip,
+              port,
+              socketId,
+              connectionCountForIP,
+              headers: req.headers,
+            }),
+          ),
         );
         connectionCountsByIP.set(ip, connectionCountForIP);
       }
@@ -408,26 +430,30 @@ function listen(): void {
           // イベント内容とフィルターの判定結果をコンソールにログ出力
           if (shouldRelay) {
             console.info(
-              JSON.stringify({
-                msg: "EVENT",
-                ip,
-                port,
-                socketId,
-                connectionCountForIP,
-                event: event[1],
-              }),
+              JSON.stringify(
+                withTiming({
+                  msg: "EVENT",
+                  ip,
+                  port,
+                  socketId,
+                  connectionCountForIP,
+                  event: event[1],
+                }),
+              ),
             );
           } else {
             console.info(
-              JSON.stringify({
-                msg: "EVENT BLOCKED",
-                because,
-                ip,
-                port,
-                socketId,
-                connectionCountForIP,
-                event: event[1],
-              }),
+              JSON.stringify(
+                withTiming({
+                  msg: "EVENT BLOCKED",
+                  because,
+                  ip,
+                  port,
+                  socketId,
+                  connectionCountForIP,
+                  event: event[1],
+                }),
+              ),
             );
           }
         } else if (event[0] === "REQ") {
@@ -437,15 +463,17 @@ function listen(): void {
           subscriptionIdAndPortNumber.set(socketAndSubscriptionId, port);
           // REQイベントの内容をコンソールにログ出力
           console.log(
-            JSON.stringify({
-              msg: "REQ",
-              ip,
-              port,
-              socketId,
-              connectionCountForIP,
-              subscriptionId,
-              req: event[2],
-            }),
+            JSON.stringify(
+              withTiming({
+                msg: "REQ",
+                ip,
+                port,
+                socketId,
+                connectionCountForIP,
+                subscriptionId,
+                req: event[2],
+              }),
+            ),
           );
 
           if (event[2].limit && event[2].limit > 500) {
@@ -462,29 +490,33 @@ function listen(): void {
           subscriptionIdAndPortNumber.set(socketAndSubscriptionId, -port);
           // REQイベントの内容をコンソールにログ出力
           console.log(
-            JSON.stringify({
-              msg: "CLOSE SUBSCRIPTION",
-              ip,
-              port,
-              socketId,
-              connectionCountForIP,
-              subscriptionId,
-              req: event[2],
-              subscriptionSize: transferredSizePerSubscriptionId.get(
-                socketAndSubscriptionId,
-              ),
-            }),
+            JSON.stringify(
+              withTiming({
+                msg: "CLOSE SUBSCRIPTION",
+                ip,
+                port,
+                socketId,
+                connectionCountForIP,
+                subscriptionId,
+                req: event[2],
+                subscriptionSize: transferredSizePerSubscriptionId.get(
+                  socketAndSubscriptionId,
+                ),
+              }),
+            ),
           );
         } else {
           console.log(
-            JSON.stringify({
-              msg: "UNKNOWN",
-              ip,
-              port,
-              socketId,
-              connectionCountForIP,
-              message: event,
-            }),
+            JSON.stringify(
+              withTiming({
+                msg: "UNKNOWN",
+                ip,
+                port,
+                socketId,
+                connectionCountForIP,
+                message: event,
+              }),
+            ),
           );
 
           if (event[0] === "INVALID") {
@@ -519,14 +551,16 @@ function listen(): void {
               isMessageSent = true;
               if (retryCount > 0) {
                 console.log(
-                  JSON.stringify({
-                    msg: "RETRY SUCCEEDED",
-                    ip,
-                    port,
-                    socketId,
-                    connectionCountForIP,
-                    retryCount,
-                  }),
+                  JSON.stringify(
+                    withTiming({
+                      msg: "RETRY SUCCEEDED",
+                      ip,
+                      port,
+                      socketId,
+                      connectionCountForIP,
+                      retryCount,
+                    }),
+                  ),
                 );
               }
               return false;
@@ -541,14 +575,16 @@ function listen(): void {
               downstreamSocket.close();
 
               console.log(
-                JSON.stringify({
-                  msg: "RETRY DISCONTINUED",
-                  ip,
-                  port,
-                  socketId,
-                  connectionCountForIP,
-                  retryCount,
-                }),
+                JSON.stringify(
+                  withTiming({
+                    msg: "RETRY DISCONTINUED",
+                    ip,
+                    port,
+                    socketId,
+                    connectionCountForIP,
+                    retryCount,
+                  }),
+                ),
               );
               return false;
             }
@@ -571,14 +607,16 @@ function listen(): void {
                 downstreamSocket.close();
 
                 console.log(
-                  JSON.stringify({
-                    msg: "RETRY TIMEOUT",
-                    ip,
-                    port,
-                    socketId,
-                    connectionCountForIP,
-                    retryCount,
-                  }),
+                  JSON.stringify(
+                    withTiming({
+                      msg: "RETRY TIMEOUT",
+                      ip,
+                      port,
+                      socketId,
+                      connectionCountForIP,
+                      retryCount,
+                    }),
+                  ),
                 );
               }
             }, 30 * 1000);
@@ -593,15 +631,17 @@ function listen(): void {
               `blocked: ${because}`,
             ]);
             console.log(
-              JSON.stringify({
-                msg: "BLOCKED EVENT",
-                ip,
-                port,
-                socketId,
-                connectionCountForIP,
-                blockedMessage,
-                event,
-              }),
+              JSON.stringify(
+                withTiming({
+                  msg: "BLOCKED EVENT",
+                  ip,
+                  port,
+                  socketId,
+                  connectionCountForIP,
+                  blockedMessage,
+                  event,
+                }),
+              ),
             );
             downstreamSocket.send(blockedMessage);
           } else {
@@ -610,15 +650,17 @@ function listen(): void {
               `blocked: ${because}`,
             ]);
             console.log(
-              JSON.stringify({
-                msg: "BLOCKED NOTICE",
-                ip,
-                port,
-                socketId,
-                connectionCountForIP,
-                blockedMessage,
-                event,
-              }),
+              JSON.stringify(
+                withTiming({
+                  msg: "BLOCKED NOTICE",
+                  ip,
+                  port,
+                  socketId,
+                  connectionCountForIP,
+                  blockedMessage,
+                  event,
+                }),
+              ),
             );
             downstreamSocket.send(blockedMessage);
           }
@@ -635,13 +677,15 @@ function listen(): void {
           connectionCountsByIP.set(ip, connectionCountForIP - 1);
         });
         console.log(
-          JSON.stringify({
-            msg: "DISCONNECTED",
-            ip,
-            port,
-            socketId,
-            connectionCountForIP,
-          }),
+          JSON.stringify(
+            withTiming({
+              msg: "DISCONNECTED",
+              ip,
+              port,
+              socketId,
+              connectionCountForIP,
+            }),
+          ),
         );
         upstreamSocket.close();
         clearIdleTimeout(downstreamSocket);
@@ -649,14 +693,16 @@ function listen(): void {
 
       downstreamSocket.on("error", async (error: Error) => {
         console.warn(
-          JSON.stringify({
-            msg: "DOWNSTREAM ERROR",
-            ip,
-            port,
-            socketId,
-            connectionCountForIP,
-            error,
-          }),
+          JSON.stringify(
+            withTiming({
+              msg: "DOWNSTREAM ERROR",
+              ip,
+              port,
+              socketId,
+              connectionCountForIP,
+              error,
+            }),
+          ),
         );
         downstreamSocket.close();
         upstreamSocket.close();
@@ -669,20 +715,24 @@ function listen(): void {
       ): void {
         upstreamSocket.on("open", async () => {
           console.log(
-            JSON.stringify({
-              msg: "UPSTREAM CONNECTED",
-              socketId,
-            }),
+            JSON.stringify(
+              withTiming({
+                msg: "UPSTREAM CONNECTED",
+                socketId,
+              }),
+            ),
           );
           setIdleTimeout(upstreamSocket);
         });
 
         upstreamSocket.on("close", async () => {
           console.log(
-            JSON.stringify({
-              msg: "UPSTREAM DISCONNECTED",
-              socketId,
-            }),
+            JSON.stringify(
+              withTiming({
+                msg: "UPSTREAM DISCONNECTED",
+                socketId,
+              }),
+            ),
           );
           downstreamSocket.close();
           clearIdleTimeout(upstreamSocket);
@@ -690,11 +740,13 @@ function listen(): void {
 
         upstreamSocket.on("error", async (error: Error) => {
           console.warn(
-            JSON.stringify({
-              msg: "UPSTREAM ERROR",
-              socketId,
-              error,
-            }),
+            JSON.stringify(
+              withTiming({
+                msg: "UPSTREAM ERROR",
+                socketId,
+                error,
+              }),
+            ),
           );
           downstreamSocket.close();
           upstreamSocket.close();
@@ -744,25 +796,29 @@ function listen(): void {
           const resultType = result[0];
           if (resultType === "OK") {
             console.log(
-              JSON.stringify({
-                msg: "EVENT WRITE",
-                ip,
-                port,
-                resultType,
-                socketId,
-                eventId: result[1],
-              }),
+              JSON.stringify(
+                withTiming({
+                  msg: "EVENT WRITE",
+                  ip,
+                  port,
+                  resultType,
+                  socketId,
+                  eventId: result[1],
+                }),
+              ),
             );
           } else if (resultType === "NOTICE") {
             console.log(
-              JSON.stringify({
-                msg: "NOTICE",
-                ip,
-                port,
-                resultType,
-                socketId,
-                message: result,
-              }),
+              JSON.stringify(
+                withTiming({
+                  msg: "NOTICE",
+                  ip,
+                  port,
+                  resultType,
+                  socketId,
+                  message: result,
+                }),
+              ),
             );
           } else if (resultType === "INVALID") {
             shouldRelay = false;
@@ -781,29 +837,33 @@ function listen(): void {
               );
             });
             console.log(
-              JSON.stringify({
-                msg: "SUBSCRIBE",
-                ip,
-                port,
-                resultType,
-                socketId,
-                subscriptionId,
-                subscriptionSize,
-              }),
+              JSON.stringify(
+                withTiming({
+                  msg: "SUBSCRIBE",
+                  ip,
+                  port,
+                  resultType,
+                  socketId,
+                  subscriptionId,
+                  subscriptionSize,
+                }),
+              ),
             );
           }
           if (shouldRelay) {
             downstreamSocket.send(message);
           } else {
             console.log(
-              JSON.stringify({
-                msg: "EVENT MUTED",
-                because,
-                ip,
-                port,
-                socketId,
-                event,
-              }),
+              JSON.stringify(
+                withTiming({
+                  msg: "EVENT MUTED",
+                  because,
+                  ip,
+                  port,
+                  socketId,
+                  event,
+                }),
+              ),
             );
           }
         });
