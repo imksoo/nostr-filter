@@ -5,7 +5,7 @@ import path from "path";
 import url from "url";
 import * as net from "net";
 import { Mutex } from "async-mutex";
-import { v4 as uuidv4 } from "uuid";
+import { v7 as uuidv7 } from "uuid";
 import * as mime from "mime-types";
 import dotenv from "dotenv";
 
@@ -212,7 +212,7 @@ function listen(): void {
       const subscriptionSizeMutex = new Mutex();
 
       // ソケットごとにユニークなIDを付与
-      const socketId = uuidv4();
+      const socketId = uuidv7();
 
       // Check whether we want to forward original request headers to the upstream server
       // This will be useful if the upstream server need original request headers to do operations like rate-limiting, etc.
