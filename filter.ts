@@ -139,6 +139,9 @@ const processingCostBlockThresholdMs: number = parseInt(
 const processingCostBlockDurationSec: number = parseInt(
   process.env.PROCESSING_COST_BLOCK_DURATION_SEC ?? "600",
 );
+const maxTrackedReqsPerSocket = parseInt(
+  process.env.MAX_TRACKED_REQS_PER_SOCKET ?? "100",
+);
 
 async function registerSocketForIP(
   ip: string,
@@ -340,6 +343,8 @@ function listen(): void {
       const transferredSizePerSubscriptionId = new Map<string, number>();
       // サブスクリプションIDごとのREQ受信時刻
       const reqStartedAtPerSubscriptionId = new Map<string, number>();
+      // サブスクリプションIDごとの直近REQ内容
+      const reqPayloadPerSubscriptionId = new Map<string, unknown>();
       // Mutexインスタンスを作成
       const subscriptionSizeMutex = new Mutex();
 
@@ -654,29 +659,24 @@ function listen(): void {
           subscriptionIdAndIPAddress.set(socketAndSubscriptionId, ip);
           subscriptionIdAndPortNumber.set(socketAndSubscriptionId, port);
           reqStartedAtPerSubscriptionId.set(socketAndSubscriptionId, Date.now());
-          // REQイベントの内容をコンソールにログ出力
-          console.info(
-            JSON.stringify(
-              withTiming({
-                msg: "REQ",
-                ip,
-                port,
-                socketId,
-                connectionCountForIP,
-                subscriptionId,
-                req: event[2],
-              }),
-            ),
-          );
+          reqPayloadPerSubscriptionId.set(socketAndSubscriptionId, event[2]);
+          if (reqPayloadPerSubscriptionId.size > maxTrackedReqsPerSocket) {
+            const oldestTrackedSubscriptionId = reqPayloadPerSubscriptionId.keys().next().value;
+            if (oldestTrackedSubscriptionId) {
+              reqPayloadPerSubscriptionId.delete(oldestTrackedSubscriptionId);
+            }
+          }
 
           if (event[2].limit && event[2].limit > 500) {
             event[2].limit = 500;
             isMessageEdited = true;
+            reqPayloadPerSubscriptionId.set(socketAndSubscriptionId, event[2]);
           }
         } else if (event[0] === "CLOSE") {
           const subscriptionId = event[1];
           const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
           reqStartedAtPerSubscriptionId.delete(socketAndSubscriptionId);
+          reqPayloadPerSubscriptionId.delete(socketAndSubscriptionId);
           subscriptionIdAndIPAddress.set(
             socketAndSubscriptionId,
             ip + " CLOSED",
@@ -1053,6 +1053,9 @@ function listen(): void {
             const processingCostMs =
               typeof reqStartedAt === "number" ? Date.now() - reqStartedAt : undefined;
             if (typeof processingCostMs === "number") {
+              const reqPayload = reqPayloadPerSubscriptionId.get(
+                socketAndSubscriptionId,
+              );
               reqStartedAtPerSubscriptionId.delete(socketAndSubscriptionId);
               const {
                 totalProcessingCostMsForIP,
@@ -1080,6 +1083,14 @@ function listen(): void {
                 if (typeof blockedUntil === "number") {
                   await scheduleProcessingCostUnblock(ip, blockedUntil);
                 }
+                const trackedReqsForIP = Array.from(reqPayloadPerSubscriptionId.entries())
+                  .filter(([trackedSocketAndSubscriptionId]) =>
+                    trackedSocketAndSubscriptionId.startsWith(`${socketId}:`)
+                  )
+                  .map(([trackedSocketAndSubscriptionId, trackedReq]) => ({
+                    subscriptionId: trackedSocketAndSubscriptionId.slice(socketId.length + 1),
+                    req: trackedReq,
+                  }));
                 console.warn(
                   JSON.stringify(
                     withTiming({
@@ -1091,6 +1102,8 @@ function listen(): void {
                       processingCostMs,
                       totalProcessingCostMsForIP,
                       processingCostBlockThresholdMs,
+                      req: reqPayload,
+                      trackedReqsForSocket: trackedReqsForIP,
                       ...(typeof blockedUntil === "number"
                         ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() }
                         : {}),
@@ -1107,6 +1120,7 @@ function listen(): void {
                   socket.close(1008, "Forbidden");
                 }
               }
+              reqPayloadPerSubscriptionId.delete(socketAndSubscriptionId);
             } else {
               console.info(
                 JSON.stringify(
