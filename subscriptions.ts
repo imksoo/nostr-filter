@@ -7,6 +7,7 @@ export function createSubscriptionTracker(socketId: string, maxTrackedReqsPerSoc
   const transferredSizes = new Map<string, number>();
   const reqStartedAt = new Map<string, number>();
   const reqPayloads = new Map<string, unknown>();
+  const activeSubscriptions = new Set<string>();
   const sizeMutex = new Mutex();
 
   function getSocketSubscriptionId(subscriptionId: string): string {
@@ -15,6 +16,7 @@ export function createSubscriptionTracker(socketId: string, maxTrackedReqsPerSoc
 
   function trackReq(subscriptionId: string, reqPayload: unknown): void {
     const socketAndSubscriptionId = getSocketSubscriptionId(subscriptionId);
+    activeSubscriptions.add(socketAndSubscriptionId);
     reqStartedAt.set(socketAndSubscriptionId, Date.now());
     reqPayloads.set(socketAndSubscriptionId, reqPayload);
     if (reqPayloads.size > maxTrackedReqsPerSocket) {
@@ -25,9 +27,18 @@ export function createSubscriptionTracker(socketId: string, maxTrackedReqsPerSoc
 
   function forgetSubscription(subscriptionId: string): string {
     const socketAndSubscriptionId = getSocketSubscriptionId(subscriptionId);
+    activeSubscriptions.delete(socketAndSubscriptionId);
     reqStartedAt.delete(socketAndSubscriptionId);
     reqPayloads.delete(socketAndSubscriptionId);
     return socketAndSubscriptionId;
+  }
+
+  function getActiveSubscriptionCount(): number {
+    return activeSubscriptions.size;
+  }
+
+  function hasActiveSubscription(subscriptionId: string): boolean {
+    return activeSubscriptions.has(getSocketSubscriptionId(subscriptionId));
   }
 
   function getReqStartedAt(subscriptionId: string): number | undefined {
@@ -67,6 +78,8 @@ export function createSubscriptionTracker(socketId: string, maxTrackedReqsPerSoc
   return {
     trackReq,
     forgetSubscription,
+    getActiveSubscriptionCount,
+    hasActiveSubscription,
     getReqStartedAt,
     getReqPayload,
     deleteReqTracking,

@@ -1,6 +1,6 @@
 import WebSocket from "ws";
 import { Mutex } from "async-mutex";
-import { processingCostBlockDurationSec, processingCostBlockThresholdMs } from "./config";
+import { blockedActionBanDurationSec, processingCostBlockDurationSec, processingCostBlockThresholdMs } from "./config";
 import { ConnectionAttemptState, ConnectionReleaseState, ProcessingCostUpdate } from "./types";
 
 let connectionCount = 0;
@@ -9,6 +9,10 @@ const totalProcessingCostMsByIP = new Map<string, number>();
 const blockedIPsByProcessingCost = new Set<string>();
 const processingCostBlockedUntilByIP = new Map<string, number>();
 const processingCostBlockTimeoutsByIP = new Map<string, NodeJS.Timeout>();
+const blockedIPsByRule = new Set<string>();
+const ruleBlockedUntilByIP = new Map<string, number>();
+const ruleBlockReasonsByIP = new Map<string, string>();
+const ruleBlockTimeoutsByIP = new Map<string, NodeJS.Timeout>();
 const activeSocketsByIP = new Map<string, Set<WebSocket>>();
 const connectionCountMutex = new Mutex();
 
@@ -28,6 +32,7 @@ export async function getConnectionAttemptState(ip: string): Promise<ConnectionA
     connectionCountForIP: 0,
     totalProcessingCostMsForIP: 0,
     isProcessingCostBlocked: false,
+    isRuleBlocked: false,
   };
 
   await connectionCountMutex.runExclusive(async () => {
@@ -35,6 +40,9 @@ export async function getConnectionAttemptState(ip: string): Promise<ConnectionA
     state.totalProcessingCostMsForIP = totalProcessingCostMsByIP.get(ip) ?? 0;
     state.isProcessingCostBlocked = blockedIPsByProcessingCost.has(ip);
     state.processingCostBlockedUntil = processingCostBlockedUntilByIP.get(ip);
+    state.isRuleBlocked = blockedIPsByRule.has(ip);
+    state.ruleBlockedUntil = ruleBlockedUntilByIP.get(ip);
+    state.ruleBlockedReason = ruleBlockReasonsByIP.get(ip);
 
     if (state.isProcessingCostBlocked && typeof state.processingCostBlockedUntil === "number" && state.processingCostBlockedUntil <= Date.now()) {
       const timeoutId = processingCostBlockTimeoutsByIP.get(ip);
@@ -46,6 +54,18 @@ export async function getConnectionAttemptState(ip: string): Promise<ConnectionA
       state.totalProcessingCostMsForIP = 0;
       state.isProcessingCostBlocked = false;
       state.processingCostBlockedUntil = undefined;
+    }
+
+    if (state.isRuleBlocked && typeof state.ruleBlockedUntil === "number" && state.ruleBlockedUntil <= Date.now()) {
+      const timeoutId = ruleBlockTimeoutsByIP.get(ip);
+      if (timeoutId) clearTimeout(timeoutId);
+      blockedIPsByRule.delete(ip);
+      ruleBlockedUntilByIP.delete(ip);
+      ruleBlockReasonsByIP.delete(ip);
+      ruleBlockTimeoutsByIP.delete(ip);
+      state.isRuleBlocked = false;
+      state.ruleBlockedUntil = undefined;
+      state.ruleBlockedReason = undefined;
     }
   });
 
@@ -71,6 +91,7 @@ export async function releaseConnection(ip: string, socket: WebSocket): Promise<
     totalProcessingCostMsForIP: 0,
     shouldResetIPState: false,
     isProcessingCostBlocked: false,
+    isRuleBlocked: false,
   };
 
   await connectionCountMutex.runExclusive(async () => {
@@ -79,13 +100,14 @@ export async function releaseConnection(ip: string, socket: WebSocket): Promise<
     const nextConnectionCountForIP = releaseState.connectionCountForIP - 1;
     releaseState.totalProcessingCostMsForIP = totalProcessingCostMsByIP.get(ip) ?? 0;
     releaseState.isProcessingCostBlocked = blockedIPsByProcessingCost.has(ip);
+    releaseState.isRuleBlocked = blockedIPsByRule.has(ip);
 
     if (nextConnectionCountForIP <= 0) {
       connectionCountsByIP.delete(ip);
       if (!releaseState.isProcessingCostBlocked) {
         totalProcessingCostMsByIP.delete(ip);
-        releaseState.shouldResetIPState = true;
       }
+      releaseState.shouldResetIPState = true;
     } else {
       connectionCountsByIP.set(ip, nextConnectionCountForIP);
     }
@@ -121,6 +143,24 @@ export async function getSocketsForIP(ip: string): Promise<WebSocket[]> {
   return sockets;
 }
 
+export async function blockIPByRule(ip: string, reason: string): Promise<{ blockedUntil: number; isNewlyBlocked: boolean }> {
+  const update = { blockedUntil: Date.now() + blockedActionBanDurationSec * 1000, isNewlyBlocked: false };
+
+  await connectionCountMutex.runExclusive(async () => {
+    if (blockedIPsByRule.has(ip)) {
+      ruleBlockReasonsByIP.set(ip, reason);
+      ruleBlockedUntilByIP.set(ip, update.blockedUntil);
+      return;
+    }
+    blockedIPsByRule.add(ip);
+    ruleBlockReasonsByIP.set(ip, reason);
+    ruleBlockedUntilByIP.set(ip, update.blockedUntil);
+    update.isNewlyBlocked = true;
+  });
+
+  return update;
+}
+
 export async function unblockIPByProcessingCost(ip: string): Promise<{ totalProcessingCostMsForIP: number; hadBlockedState: boolean }> {
   let totalProcessingCostMsForIP = 0;
   let hadBlockedState = false;
@@ -140,6 +180,25 @@ export async function unblockIPByProcessingCost(ip: string): Promise<{ totalProc
   return { totalProcessingCostMsForIP, hadBlockedState };
 }
 
+export async function unblockIPByRule(ip: string): Promise<{ hadBlockedState: boolean; ruleBlockedReason?: string }> {
+  let hadBlockedState = false;
+  let ruleBlockedReason: string | undefined;
+
+  await connectionCountMutex.runExclusive(async () => {
+    hadBlockedState = blockedIPsByRule.delete(ip);
+    ruleBlockedReason = ruleBlockReasonsByIP.get(ip);
+    ruleBlockedUntilByIP.delete(ip);
+    ruleBlockReasonsByIP.delete(ip);
+    const timeoutId = ruleBlockTimeoutsByIP.get(ip);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      ruleBlockTimeoutsByIP.delete(ip);
+    }
+  });
+
+  return { hadBlockedState, ruleBlockedReason };
+}
+
 export async function scheduleProcessingCostUnblock(ip: string, blockedUntil: number, onUnblock: (ip: string) => Promise<void>): Promise<void> {
   await connectionCountMutex.runExclusive(async () => {
     const currentTimeout = processingCostBlockTimeoutsByIP.get(ip);
@@ -149,5 +208,17 @@ export async function scheduleProcessingCostUnblock(ip: string, blockedUntil: nu
       void onUnblock(ip);
     }, delayMs);
     processingCostBlockTimeoutsByIP.set(ip, timeoutId);
+  });
+}
+
+export async function scheduleRuleUnblock(ip: string, blockedUntil: number, onUnblock: (ip: string) => Promise<void>): Promise<void> {
+  await connectionCountMutex.runExclusive(async () => {
+    const currentTimeout = ruleBlockTimeoutsByIP.get(ip);
+    if (currentTimeout) clearTimeout(currentTimeout);
+    const delayMs = Math.max(0, blockedUntil - Date.now());
+    const timeoutId = setTimeout(() => {
+      void onUnblock(ip);
+    }, delayMs);
+    ruleBlockTimeoutsByIP.set(ip, timeoutId);
   });
 }

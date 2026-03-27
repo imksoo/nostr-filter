@@ -13,6 +13,9 @@ export type ConnectionAttemptState = {
   totalProcessingCostMsForIP: number;
   isProcessingCostBlocked: boolean;
   processingCostBlockedUntil?: number;
+  isRuleBlocked: boolean;
+  ruleBlockedUntil?: number;
+  ruleBlockedReason?: string;
 };
 
 export type ConnectionReleaseState = {
@@ -20,6 +23,7 @@ export type ConnectionReleaseState = {
   totalProcessingCostMsForIP: number;
   shouldResetIPState: boolean;
   isProcessingCostBlocked: boolean;
+  isRuleBlocked: boolean;
 };
 
 export type ProcessingCostUpdate = {

@@ -5,14 +5,15 @@ import url from "url";
 import * as mime from "mime-types";
 import { v7 as uuidv7 } from "uuid";
 import WebSocket from "ws";
-import { cidrRanges, enableForwardReqHeaders, listenPort, logStartupConfig, maxTrackedReqsPerSocket, maxWebsocketPayloadSize, processingCostBlockDurationSec, processingCostBlockThresholdMs, singleReqProcessingCostWarnThresholdMs, upstreamHttpUrl, upstreamWsForFastBotUrl, upstreamWsUrl } from "./config";
+import { blockedActionBanDurationSec, blockedReqKinds, cidrRanges, enableForwardReqHeaders, listenPort, logStartupConfig, maxConcurrentReqsPerSocket, maxTrackedReqsPerSocket, maxWebsocketPayloadSize, processingCostBlockDurationSec, processingCostBlockThresholdMs, singleReqProcessingCostWarnThresholdMs, upstreamHttpUrl, upstreamWsForFastBotUrl, upstreamWsUrl } from "./config";
 import { evaluateDownstreamEvent, evaluateUpstreamEvent, ipMatchesCidr } from "./filters";
 import { log } from "./logger";
-import { clearIdleTimeout, getClientAddress, resetIdleTimeout, setIdleTimeout } from "./network";
-import { acceptConnection, addProcessingCostForIP, getConnectionAttemptState, getConnectionCount, getSocketsForIP, releaseConnection, scheduleProcessingCostUnblock, unblockIPByProcessingCost } from "./processing-state";
+import { buildForwardHeaders, clearIdleTimeout, getClientAddress, resetIdleTimeout, setIdleTimeout } from "./network";
+import { acceptConnection, addProcessingCostForIP, blockIPByRule, getConnectionAttemptState, getConnectionCount, getSocketsForIP, releaseConnection, scheduleProcessingCostUnblock, scheduleRuleUnblock, unblockIPByProcessingCost, unblockIPByRule } from "./processing-state";
 import { createSubscriptionTracker } from "./subscriptions";
 
 let upstreamWriteSocket = new WebSocket(upstreamWsForFastBotUrl);
+const blockedConnectLogUntilByIP = new Map<string, number>();
 
 logStartupConfig();
 
@@ -21,6 +22,12 @@ async function handleProcessingCostUnblock(ip: string): Promise<void> {
   if (!hadBlockedState) return;
 
   log("INFO", { msg: "IP PROCESSING COST UNBLOCKED", ip, totalProcessingCostMsForIP, processingCostBlockDurationSec, currentTime: new Date().toISOString() });
+}
+
+async function handleRuleUnblock(ip: string): Promise<void> {
+  const { hadBlockedState, ruleBlockedReason } = await unblockIPByRule(ip);
+  if (!hadBlockedState) return;
+  log("INFO", { msg: "IP RULE BLOCK UNBLOCKED", ip, ruleBlockedReason, blockedActionBanDurationSec, currentTime: new Date().toISOString() });
 }
 
 function loggingMemoryUsage(): void {
@@ -41,8 +48,9 @@ function listen(): void {
   const server = http.createServer(async (req, res) => {
     if (req.url && req.headers.accept !== "application/nostr+json") {
       log("DEBUG", { msg: "HTTP GET", url: req.url });
-      const pathname = req.method === "GET" && req.url === "/" ? "/index.html" : url.parse(req.url).pathname || "";
-      const filePath = path.join(__dirname, "/static/", pathname);
+      const requestUrl = url.parse(req.url);
+      const pathname = requestUrl.pathname === "/" && req.method === "GET" ? "/index.html" : requestUrl.pathname || "";
+      const filePath = path.join(__dirname, "static", pathname.replace(/^\/+/, ""));
       const contentType = mime.contentType(path.extname(filePath)) || "application/octet-stream";
       fs.readFile(filePath, (err, data) => {
         if (err) {
@@ -70,6 +78,8 @@ function listen(): void {
   wss.on("connection", async (downstreamSocket, req) => {
     const socketId = uuidv7();
     const subscriptionTracker = createSubscriptionTracker(socketId, maxTrackedReqsPerSocket);
+    let isSocketTerminating = false;
+    let downstreamMessageQueue = Promise.resolve();
     const connectionStartTime = new Date();
     const connectionStartTimeISO = connectionStartTime.toISOString();
     const elapsedMs = (): number => Date.now() - connectionStartTime.getTime();
@@ -79,12 +89,24 @@ function listen(): void {
       ...(includeElapsed ? { elapsedMs: elapsedMs() } : {}),
     });
 
-    const { ip, port } = getClientAddress(req);
-    const wsClientOptions = enableForwardReqHeaders ? { headers: req.headers } : undefined;
+    const clientAddress = getClientAddress(req);
+    const { ip, port } = clientAddress;
+    const wsClientOptions = enableForwardReqHeaders ? { headers: buildForwardHeaders(req, clientAddress) } : undefined;
     const upstreamSocket = new WebSocket(upstreamWsUrl, wsClientOptions);
 
-    function sendBlockedNoticeAndClose(because: string, closeCode: number, closeReason: string, extraPayload: Record<string, unknown> = {}): void {
-      log("WARN", withTiming({ msg: "CONNECTING BLOCKED", because, ip, port, socketId, ...extraPayload }));
+    function beginSocketTermination(): boolean {
+      if (isSocketTerminating) return false;
+      isSocketTerminating = true;
+      return true;
+    }
+
+    function sendBlockedNoticeAndClose(because: string, closeCode: number, closeReason: string, extraPayload: Record<string, unknown> = {}, logUntil?: number): void {
+      if (!beginSocketTermination()) return;
+      const shouldLogBlockedConnect = typeof logUntil !== "number" || (blockedConnectLogUntilByIP.get(ip) ?? 0) < Date.now();
+      if (shouldLogBlockedConnect) {
+        if (typeof logUntil === "number") blockedConnectLogUntilByIP.set(ip, logUntil);
+        log("WARN", withTiming({ msg: "CONNECTING BLOCKED", because, ip, port, socketId, ...extraPayload }));
+      }
       const blockedMessage = JSON.stringify(["NOTICE", `blocked: ${because}`]);
       log("DEBUG", withTiming({ msg: "BLOCKED NOTICE", ip, port, socketId, because, blockedMessage, ...extraPayload }));
       upstreamSocket.close();
@@ -201,7 +223,15 @@ function listen(): void {
         totalProcessingCostMsForIP: connectionAttempt.totalProcessingCostMsForIP,
         processingCostBlockThresholdMs,
         processingCostBlockedUntil: connectionAttempt.processingCostBlockedUntil,
-      });
+      }, connectionAttempt.processingCostBlockedUntil);
+      return;
+    }
+
+    if (connectionAttempt.isRuleBlocked) {
+      sendBlockedNoticeAndClose(connectionAttempt.ruleBlockedReason ?? "Blocked by repeated blocked requests", 1008, "Forbidden", {
+        connectionCountForIP: connectionAttempt.connectionCountForIP,
+        ruleBlockedUntil: connectionAttempt.ruleBlockedUntil,
+      }, connectionAttempt.ruleBlockedUntil);
       return;
     }
 
@@ -215,7 +245,8 @@ function listen(): void {
     const connectionCountForIP = await acceptConnection(ip, downstreamSocket);
     log("INFO", withTiming({ msg: "CONNECTED", ip, port, socketId, connectionCountForIP, headers: req.headers }));
 
-    downstreamSocket.on("message", async (data) => {
+    async function handleDownstreamMessage(data: WebSocket.RawData): Promise<void> {
+      if (isSocketTerminating) return;
       resetIdleTimeout(downstreamSocket);
       resetIdleTimeout(upstreamSocket);
 
@@ -236,15 +267,67 @@ function listen(): void {
         shouldRelay = decision.shouldRelay;
         because = decision.because;
 
+        if (!shouldRelay && because.startsWith("Blocked event by blocked kind:")) {
+          if (!beginSocketTermination()) return;
+          const { blockedUntil, isNewlyBlocked } = await blockIPByRule(ip, because);
+          await scheduleRuleUnblock(ip, blockedUntil, handleRuleUnblock);
+          const blockedMessage = JSON.stringify(["NOTICE", `blocked: ${because}`]);
+          if (isNewlyBlocked) {
+            log("WARN", withTiming({ msg: "IP RULE BLOCKED", because, ip, port, socketId, blockedActionBanDurationSec, ruleBlockedUntil: new Date(blockedUntil).toISOString(), event: event[1] }));
+            const sockets = await getSocketsForIP(ip);
+            for (const socket of sockets) {
+              if (socket === downstreamSocket) continue;
+              socket.send(blockedMessage);
+              socket.close(1008, "Forbidden");
+            }
+          }
+          downstreamSocket.send(blockedMessage);
+          downstreamSocket.close(1008, "Forbidden");
+          upstreamSocket.close();
+          return;
+        }
+
         const msg = shouldRelay ? "EVENT" : "EVENT BLOCKED";
         log("INFO", withTiming({ msg, ...(shouldRelay ? {} : { because }), ip, port, socketId, connectionCountForIP, event: event[1] }));
       } else if (event[0] === "REQ") {
         const subscriptionId = event[1];
-        subscriptionTracker.trackReq(subscriptionId, event[2]);
-        if (event[2].limit && event[2].limit > 500) {
-          event[2].limit = 500;
+        const reqFilter = event[2];
+        const reqKinds = Array.isArray(reqFilter?.kinds) ? reqFilter.kinds.filter((kind: unknown): kind is number => typeof kind === "number") : [];
+        const blockedReqKind = reqKinds.find((kind: number) => blockedReqKinds.includes(kind));
+        if (typeof blockedReqKind === "number") {
+          if (!beginSocketTermination()) return;
+          shouldRelay = false;
+          because = `Blocked by blocked REQ kind: ${blockedReqKind}`;
+          const { blockedUntil, isNewlyBlocked } = await blockIPByRule(ip, because);
+          await scheduleRuleUnblock(ip, blockedUntil, handleRuleUnblock);
+          const blockedMessage = JSON.stringify(["NOTICE", `blocked: ${because}`]);
+          log("WARN", withTiming({ msg: "REQ BLOCKED", because, ip, port, socketId, connectionCountForIP, subscriptionId, blockedReqKind, blockedReqKinds, req: reqFilter, blockedMessage }));
+          if (isNewlyBlocked) {
+            log("WARN", withTiming({ msg: "IP RULE BLOCKED", because, ip, port, socketId, blockedActionBanDurationSec, ruleBlockedUntil: new Date(blockedUntil).toISOString(), subscriptionId, blockedReqKind, req: reqFilter }));
+          }
+          downstreamSocket.send(blockedMessage);
+          downstreamSocket.close(1008, "Blocked REQ kind");
+          upstreamSocket.close();
+          return;
+        }
+        const isNewSubscription = !subscriptionTracker.hasActiveSubscription(subscriptionId);
+        const activeSubscriptionCount = subscriptionTracker.getActiveSubscriptionCount();
+        if (isNewSubscription && activeSubscriptionCount >= maxConcurrentReqsPerSocket) {
+          if (!beginSocketTermination()) return;
+          shouldRelay = false;
+          because = "Blocked by too many concurrent REQs";
+          const blockedMessage = JSON.stringify(["NOTICE", `blocked: ${because}`]);
+          log("WARN", withTiming({ msg: "REQ BLOCKED", because, ip, port, socketId, connectionCountForIP, subscriptionId, activeSubscriptionCount, maxConcurrentReqsPerSocket, req: reqFilter, blockedMessage }));
+          downstreamSocket.send(blockedMessage);
+          downstreamSocket.close(1008, "Too many concurrent REQs");
+          upstreamSocket.close();
+          return;
+        }
+        subscriptionTracker.trackReq(subscriptionId, reqFilter);
+        if (reqFilter.limit && reqFilter.limit > 500) {
+          reqFilter.limit = 500;
           isMessageEdited = true;
-          subscriptionTracker.trackReq(subscriptionId, event[2]);
+          subscriptionTracker.trackReq(subscriptionId, reqFilter);
         }
       } else if (event[0] === "CLOSE") {
         const subscriptionId = event[1];
@@ -315,6 +398,21 @@ function listen(): void {
         }
         downstreamSocket.close();
       }
+    }
+
+    downstreamSocket.on("message", (data) => {
+      downstreamMessageQueue = downstreamMessageQueue
+        .then(async () => {
+          await handleDownstreamMessage(data);
+        })
+        .catch(async (error: Error) => {
+          log("WARN", withTiming({ msg: "DOWNSTREAM MESSAGE ERROR", ip, port, socketId, connectionCountForIP, error }));
+          if (!isSocketTerminating) {
+            isSocketTerminating = true;
+            downstreamSocket.close();
+            upstreamSocket.close();
+          }
+        });
     });
 
     downstreamSocket.on("close", async () => {

@@ -75,7 +75,7 @@ LISTEN_PORT=8081
 UPSTREAM_HTTP_URL=http://192.168.1.1:8080
 UPSTREAM_WS_URL=ws://192.168.1.1:8080
 UPSTREAM_WS_FOR_FAST_BOT_URL=ws://192.168.1.1:8081
-ENABLE_FORWARD_REQ_HEADERS=false
+ENABLE_FORWARD_REQ_HEADERS=true
 MAX_WEBSOCKET_PAYLOAD_SIZE=1000000
 FILTER_PROXY_EVENTS=false
 ```
@@ -84,6 +84,7 @@ Filtering and blocking settings:
 
 ```ini
 BLOCKED_PUBKEYS=
+BLOCKED_REQ_KINDS=1009,22668,22689,22608,22837,22817,22760,22628,20000,20001,1000
 WHITELISTED_PUBKEYS=
 BLOCKED_IP_ADDR_1=43.205.189.224/32
 MUTE_FILTER_1=/spam/i
@@ -95,8 +96,10 @@ Processing-cost settings:
 ```ini
 PROCESSING_COST_BLOCK_THRESHOLD_MS=60000
 PROCESSING_COST_BLOCK_DURATION_SEC=600
+BLOCKED_ACTION_BAN_DURATION_SEC=600
 SINGLE_REQ_PROCESSING_COST_WARN_THRESHOLD_MS=10000
 MAX_TRACKED_REQS_PER_SOCKET=100
+MAX_CONCURRENT_REQS_PER_SOCKET=8
 ```
 
 ### Environment variables
@@ -112,13 +115,15 @@ MAX_TRACKED_REQS_PER_SOCKET=100
 - `UPSTREAM_WS_FOR_FAST_BOT_URL`
   Secondary upstream WebSocket used for forwarding downstream `EVENT` writes.
 - `ENABLE_FORWARD_REQ_HEADERS`
-  When `true`, forwards original request headers to the upstream WebSocket connection.
+  When `true`, forwards the original request headers to the upstream WebSocket connection and explicitly sets `X-Real-IP`, `X-Real-Port`, and `X-Forwarded-*` based on the client connection seen by `nostr-filter`.
 - `MAX_WEBSOCKET_PAYLOAD_SIZE`
   Maximum accepted WebSocket message size in bytes.
 - `FILTER_PROXY_EVENTS`
   Enables additional filtering for proxy-style events.
 - `BLOCKED_PUBKEYS`
   Comma-separated hex pubkeys that are always blocked.
+- `BLOCKED_REQ_KINDS`
+  Comma-separated event kinds. If a client sends a `REQ` whose `kinds` contains any of these values, or writes an `EVENT` with one of these kinds, `nostr-filter` rejects it before forwarding it upstream.
 - `WHITELISTED_PUBKEYS`
   Comma-separated hex pubkeys that bypass some filtering checks where applicable.
 - `BLOCKED_IP_ADDR_*`
@@ -129,10 +134,14 @@ MAX_TRACKED_REQS_PER_SOCKET=100
   Cumulative per-IP `REQ -> EOSE` cost threshold in milliseconds. `0` disables cumulative blocking.
 - `PROCESSING_COST_BLOCK_DURATION_SEC`
   How long an IP remains blocked after crossing the cumulative threshold.
+- `BLOCKED_ACTION_BAN_DURATION_SEC`
+  How long an IP remains blocked after it triggers a blocked `REQ` or blocked `EVENT` kind.
 - `SINGLE_REQ_PROCESSING_COST_WARN_THRESHOLD_MS`
   Per-request warning threshold in milliseconds. `0` disables heavy single-request warnings.
 - `MAX_TRACKED_REQS_PER_SOCKET`
   Maximum number of tracked request payloads kept in memory for one socket.
+- `MAX_CONCURRENT_REQS_PER_SOCKET`
+  Maximum number of active subscriptions allowed on one client WebSocket. A new `REQ` above this limit is rejected by `nostr-filter` before it reaches `strfry`.
 
 ## Request-cost tracking
 
@@ -162,6 +171,26 @@ When one request exceeds `SINGLE_REQ_PROCESSING_COST_WARN_THRESHOLD_MS`, the fil
 - `trackedReqsForSocket`
 
 This is useful when a client never crosses the cumulative block threshold but still sends expensive searches.
+
+### Concurrent `REQ` limit
+
+`nostr-filter` also enforces a per-socket active subscription cap before forwarding `REQ` messages upstream.
+
+- Existing subscription IDs may be replaced by another `REQ` with the same ID.
+- New subscription IDs above `MAX_CONCURRENT_REQS_PER_SOCKET` are rejected immediately.
+- The filter emits `REQ BLOCKED` and closes the socket with a policy error before `strfry` can emit `too many concurrent REQs`.
+
+### Blocked `REQ` kinds
+
+If `BLOCKED_REQ_KINDS` is set, `nostr-filter` rejects:
+
+- any `REQ` whose `kinds` array contains one of those values
+- any downstream `EVENT` write whose `kind` matches one of those values
+
+- The triggering IP is temporarily blocked for `BLOCKED_ACTION_BAN_DURATION_SEC`
+- The filter emits `IP RULE BLOCKED`
+- Blocked `REQ` messages emit `REQ BLOCKED`, return a `NOTICE`, and close the socket before reaching `strfry`
+- Blocked `EVENT` writes are rejected before they reach `strfry`, and sockets for that IP are closed
 
 ### Temporary cumulative blocks
 

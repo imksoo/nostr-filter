@@ -14,6 +14,19 @@ export function getClientAddress(req: http.IncomingMessage): ClientAddress {
   return { ip, port };
 }
 
+export function buildForwardHeaders(req: http.IncomingMessage, clientAddress: ClientAddress): http.OutgoingHttpHeaders {
+  const forwardedFor = typeof req.headers["x-forwarded-for"] === "string" && req.headers["x-forwarded-for"].trim() !== "" ? req.headers["x-forwarded-for"] : clientAddress.ip;
+  return {
+    ...req.headers,
+    "x-real-ip": clientAddress.ip,
+    "x-real-port": String(clientAddress.port),
+    "x-forwarded-for": forwardedFor,
+    "x-forwarded-host": typeof req.headers.host === "string" ? req.headers.host : "",
+    "x-forwarded-proto": typeof req.headers["x-forwarded-proto"] === "string" ? req.headers["x-forwarded-proto"] : "http",
+    "x-forwarded-server": typeof req.headers["x-forwarded-server"] === "string" ? req.headers["x-forwarded-server"] : typeof req.headers.host === "string" ? req.headers.host : "",
+  };
+}
+
 export function setIdleTimeout(socket: WebSocket, timeout: number = defaultTimeoutValue): void {
   const timeoutId = setTimeout(() => {
     socket.close();

@@ -20,6 +20,7 @@ export const contentFilters: RegExp[] = Object.keys(process.env)
 export const blockedPubkeys = typeof process.env.BLOCKED_PUBKEYS !== "undefined" && process.env.BLOCKED_PUBKEYS !== "" ? process.env.BLOCKED_PUBKEYS.split(",").map((pubkey) => pubkey.trim()) : [];
 
 export const whitelistedPubkeys = typeof process.env.WHITELISTED_PUBKEYS !== "undefined" && process.env.WHITELISTED_PUBKEYS !== "" ? process.env.WHITELISTED_PUBKEYS.split(",").map((pubkey) => pubkey.trim()) : [];
+export const blockedReqKinds = typeof process.env.BLOCKED_REQ_KINDS !== "undefined" && process.env.BLOCKED_REQ_KINDS !== "" ? process.env.BLOCKED_REQ_KINDS.split(",").map((kind) => parseInt(kind.trim(), 10)).filter((kind) => !Number.isNaN(kind)) : [];
 
 export const filterProxyEvents = process.env.FILTER_PROXY_EVENTS === "true";
 export const enableForwardReqHeaders = process.env.ENABLE_FORWARD_REQ_HEADERS === "true";
@@ -31,6 +32,8 @@ export const processingCostBlockThresholdMs = parseInt(process.env.PROCESSING_CO
 export const processingCostBlockDurationSec = parseInt(process.env.PROCESSING_COST_BLOCK_DURATION_SEC ?? "600");
 export const singleReqProcessingCostWarnThresholdMs = parseInt(process.env.SINGLE_REQ_PROCESSING_COST_WARN_THRESHOLD_MS ?? "10000");
 export const maxTrackedReqsPerSocket = parseInt(process.env.MAX_TRACKED_REQS_PER_SOCKET ?? "100");
+export const maxConcurrentReqsPerSocket = parseInt(process.env.MAX_CONCURRENT_REQS_PER_SOCKET ?? "8");
+export const blockedActionBanDurationSec = parseInt(process.env.BLOCKED_ACTION_BAN_DURATION_SEC ?? "600");
 
 export function logStartupConfig(): void {
   log("INFO", { msg: "process.env", ...process.env });
@@ -41,10 +44,13 @@ export function logStartupConfig(): void {
     upstreamWsUrl,
     upstreamWsForFastBotUrl,
     contentFilters: contentFilters.map((regex) => `/${regex.source}/${regex.flags}`),
+    blockedReqKinds,
     blockedIPAddresses: cidrRanges,
     processingCostBlockThresholdMs,
     processingCostBlockDurationSec,
     singleReqProcessingCostWarnThresholdMs,
     maxTrackedReqsPerSocket,
+    maxConcurrentReqsPerSocket,
+    blockedActionBanDurationSec,
   });
 }
