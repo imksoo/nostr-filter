@@ -40,10 +40,10 @@ PROCESSING_COST_BLOCK_DURATION_SEC=600
 
 `PROCESSING_COST_BLOCK_THRESHOLD_MS` is the cumulative per-IP processing cost threshold in milliseconds. `PROCESSING_COST_BLOCK_DURATION_SEC` is the temporary block duration in seconds after the threshold is reached. The filter measures the elapsed time from each `REQ` to its corresponding `EOSE`, adds that cost to the client IP total, logs it, temporarily blocks the IP when the cumulative total reaches the threshold, and automatically unblocks and resets that IP after the configured duration. When the number of active connections for that IP becomes zero, a summary log is also emitted.
 
-In the filter.ts file, you can configure the following options:
+In the main.ts file, you can configure the following options:
 
 1. Content Filters
-contentFilters is an array of regular expression patterns used to filter Nostr event contents. To add a new filtering pattern, simply add a new regular expression pattern to the array. For example:
+   contentFilters is an array of regular expression patterns used to filter Nostr event contents. To add a new filtering pattern, simply add a new regular expression pattern to the array. For example:
 
 ```typescript
 const contentFilters: RegExp[] = [
@@ -55,7 +55,7 @@ const contentFilters: RegExp[] = [
 ```
 
 2. Blocked Public Keys
-blockedPubkeys is an array of public keys that represent users you wish to block. To block a user, add their public key to the array. For example:
+   blockedPubkeys is an array of public keys that represent users you wish to block. To block a user, add their public key to the array. For example:
 
 ```typescript
 const blockedPubkeys: string[] = [
@@ -66,7 +66,7 @@ const blockedPubkeys: string[] = [
 ```
 
 3. Client IP Address CIDR Filters
-cidrRanges is an array of CIDR notations representing IP addresses or ranges that you want to filter. To add a new CIDR filter, simply add the IP address or range to the array. For example:
+   cidrRanges is an array of CIDR notations representing IP addresses or ranges that you want to filter. To add a new CIDR filter, simply add the IP address or range to the array. For example:
 
 ```typescript
 const cidrRanges: string[] = [
@@ -75,6 +75,7 @@ const cidrRanges: string[] = [
   // Add more IP addresses or ranges below
 ];
 ```
+
 Once you have configured the settings according to your needs, the script will filter Nostr event contents, block users, and filter client IP addresses based on your defined patterns and lists.
 
 ## Usage
@@ -93,4 +94,5 @@ We welcome contributions from the community. If you would like to contribute to 
 Please make sure to follow the code style and conventions used in the project. If you have any questions or need help, feel free to open an issue.
 
 ## License
+
 nostr-filter is licensed under the MIT License.

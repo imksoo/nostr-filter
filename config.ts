@@ -1,0 +1,48 @@
+import dotenv from "dotenv";
+import { log } from "./logger";
+
+dotenv.config();
+
+export const NODE_ENV = process.env.NODE_ENV || "production";
+export const listenPort = parseInt(process.env.LISTEN_PORT ?? "8081");
+export const upstreamHttpUrl = process.env.UPSTREAM_HTTP_URL ?? "http://localhost:8080";
+export const upstreamWsUrl = process.env.UPSTREAM_WS_URL ?? "ws://localhost:8080";
+export const upstreamWsForFastBotUrl = process.env.UPSTREAM_WS_FOR_FAST_BOT_URL ?? "ws://localhost:8080";
+
+export const contentFilters: RegExp[] = Object.keys(process.env)
+  .filter((key) => key.startsWith("MUTE_FILTER_"))
+  .map((key) => {
+    const pattern = process.env[key]!;
+    const match = pattern.match(/^\/(.+)\/([gimy]*)$/);
+    return match ? new RegExp(match[1], match[2]) : new RegExp(pattern);
+  });
+
+export const blockedPubkeys = typeof process.env.BLOCKED_PUBKEYS !== "undefined" && process.env.BLOCKED_PUBKEYS !== "" ? process.env.BLOCKED_PUBKEYS.split(",").map((pubkey) => pubkey.trim()) : [];
+
+export const whitelistedPubkeys = typeof process.env.WHITELISTED_PUBKEYS !== "undefined" && process.env.WHITELISTED_PUBKEYS !== "" ? process.env.WHITELISTED_PUBKEYS.split(",").map((pubkey) => pubkey.trim()) : [];
+
+export const filterProxyEvents = process.env.FILTER_PROXY_EVENTS === "true";
+export const enableForwardReqHeaders = process.env.ENABLE_FORWARD_REQ_HEADERS === "true";
+export const maxWebsocketPayloadSize = parseInt(process.env.MAX_WEBSOCKET_PAYLOAD_SIZE ?? "1000000");
+export const cidrRanges = Object.keys(process.env)
+  .filter((key) => key.startsWith("BLOCKED_IP_ADDR_"))
+  .map((key) => process.env[key]!);
+export const processingCostBlockThresholdMs = parseInt(process.env.PROCESSING_COST_BLOCK_THRESHOLD_MS ?? "0");
+export const processingCostBlockDurationSec = parseInt(process.env.PROCESSING_COST_BLOCK_DURATION_SEC ?? "600");
+export const maxTrackedReqsPerSocket = parseInt(process.env.MAX_TRACKED_REQS_PER_SOCKET ?? "100");
+
+export function logStartupConfig(): void {
+  log("INFO", { msg: "process.env", ...process.env });
+  log("INFO", {
+    msg: "configs",
+    listenPort,
+    upstreamHttpUrl,
+    upstreamWsUrl,
+    upstreamWsForFastBotUrl,
+    contentFilters: contentFilters.map((regex) => `/${regex.source}/${regex.flags}`),
+    blockedIPAddresses: cidrRanges,
+    processingCostBlockThresholdMs,
+    processingCostBlockDurationSec,
+    maxTrackedReqsPerSocket,
+  });
+}
