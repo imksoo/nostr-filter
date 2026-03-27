@@ -1,98 +1,226 @@
-# Introduction
+# nostr-filter
 
-Nostr-filter is a user-friendly filtering program designed to improve the management of your Nostr relay server. This program enables you to easily filter out undesired events, block specific users, and limit access from certain IP addresses or ranges. By employing regular expressions for content filtering, a list of public keys for user blocking, and a list of CIDR notations for IP address filtering, you can effortlessly tailor the settings to your preferences and ensure a smooth and optimized experience for your Nostr relay users.
+`nostr-filter` is a Nostr relay front filter that sits in front of an upstream relay and filters traffic by content, pubkey, and client IP address. It also measures request cost from `REQ` to `EOSE`, accumulates that cost per client IP, warns on heavy single requests, and temporarily blocks clients whose cumulative cost becomes too high.
 
-## Installation
+The project is intended to run as a Docker Compose service and expose a filtered WebSocket/HTTP endpoint to clients while forwarding allowed traffic to an upstream relay.
 
-To run `nostr-filter`, you need to have Docker and Docker Compose installed.
+## What it does
 
-1. Clone this repository.
+- Filters downstream `EVENT` messages by content regex, blocked pubkeys, and optional proxy-event rules.
+- Blocks clients by CIDR range before they are accepted.
+- Tracks `REQ` to `EOSE` elapsed time as processing cost.
+- Accumulates processing cost per client IP across active connections.
+- Logs an `IP PROCESSING COST SUMMARY` when the active connection count for an IP returns to zero.
+- Emits a `HEAVY SINGLE REQ` warning when one request is expensive even if it does not trigger a block.
+- Temporarily blocks an IP when cumulative processing cost reaches the configured threshold, then automatically unblocks it after the configured duration.
+- Serves static files from `./static/` for normal HTTP requests. A `GET /` returns `static/index.html`.
 
-Change directory to the cloned repository.
+## Runtime layout
 
-```shell
-cd nostr-filter/
+Current source layout:
+
+- [main.ts](/home/strfry/nostr-filter/main.ts): entrypoint, HTTP server, WebSocket orchestration.
+- [config.ts](/home/strfry/nostr-filter/config.ts): environment variable parsing and startup config logging.
+- [filters.ts](/home/strfry/nostr-filter/filters.ts): message filtering decisions.
+- [processing-state.ts](/home/strfry/nostr-filter/processing-state.ts): per-IP connection and processing-cost state.
+- [subscriptions.ts](/home/strfry/nostr-filter/subscriptions.ts): tracked `REQ` state per socket.
+- [network.ts](/home/strfry/nostr-filter/network.ts): client address parsing and idle timeout helpers.
+- [logger.ts](/home/strfry/nostr-filter/logger.ts): JSON log output through `log(level, payload)`.
+- [compose.yaml](/home/strfry/nostr-filter/compose.yaml): local deployment definition.
+
+## Requirements
+
+- Docker
+- Docker Compose
+
+## Quick start
+
+1. Clone the repository and move into it.
+
+```sh
+git clone <your-fork-or-repo-url>
+cd nostr-filter
 ```
 
-2. Build the Docker image.
+2. Create your runtime configuration.
 
-```shell
+```sh
+cp .env.sample .env
+```
+
+3. Edit `.env` for your upstream relay and filtering rules.
+
+4. Build and start the service.
+
+```sh
 docker compose build
+docker compose up -d
 ```
 
-3. Start the Docker container.
+5. Inspect logs.
 
-```shell
-docker compose up -d
+```sh
+docker compose logs -f filter
 ```
 
 ## Configuration
 
-In the .env file, you can configure the following options:
+Runtime configuration is loaded from `.env`. See [.env.sample](/home/strfry/nostr-filter/.env.sample) for a complete example.
+
+Core relay settings:
 
 ```ini
+NODE_ENV=production
 LISTEN_PORT=8081
 UPSTREAM_HTTP_URL=http://192.168.1.1:8080
 UPSTREAM_WS_URL=ws://192.168.1.1:8080
+UPSTREAM_WS_FOR_FAST_BOT_URL=ws://192.168.1.1:8081
+ENABLE_FORWARD_REQ_HEADERS=false
+MAX_WEBSOCKET_PAYLOAD_SIZE=1000000
+FILTER_PROXY_EVENTS=false
+```
+
+Filtering and blocking settings:
+
+```ini
+BLOCKED_PUBKEYS=
+WHITELISTED_PUBKEYS=
+BLOCKED_IP_ADDR_1=43.205.189.224/32
+MUTE_FILTER_1=/spam/i
+MUTE_FILTER_2=/lnbc/
+```
+
+Processing-cost settings:
+
+```ini
 PROCESSING_COST_BLOCK_THRESHOLD_MS=60000
 PROCESSING_COST_BLOCK_DURATION_SEC=600
+SINGLE_REQ_PROCESSING_COST_WARN_THRESHOLD_MS=10000
+MAX_TRACKED_REQS_PER_SOCKET=100
 ```
 
-`PROCESSING_COST_BLOCK_THRESHOLD_MS` is the cumulative per-IP processing cost threshold in milliseconds. `PROCESSING_COST_BLOCK_DURATION_SEC` is the temporary block duration in seconds after the threshold is reached. The filter measures the elapsed time from each `REQ` to its corresponding `EOSE`, adds that cost to the client IP total, logs it, temporarily blocks the IP when the cumulative total reaches the threshold, and automatically unblocks and resets that IP after the configured duration. When the number of active connections for that IP becomes zero, a summary log is also emitted.
+### Environment variables
 
-In the main.ts file, you can configure the following options:
+- `NODE_ENV`
+  In `production`, `DEBUG` level logs are suppressed. `INFO`, `WARN`, and `ERROR` remain enabled.
+- `LISTEN_PORT`
+  Port exposed by the filter service.
+- `UPSTREAM_HTTP_URL`
+  Upstream relay HTTP endpoint used for non-WebSocket proxy requests.
+- `UPSTREAM_WS_URL`
+  Main upstream WebSocket endpoint.
+- `UPSTREAM_WS_FOR_FAST_BOT_URL`
+  Secondary upstream WebSocket used for forwarding downstream `EVENT` writes.
+- `ENABLE_FORWARD_REQ_HEADERS`
+  When `true`, forwards original request headers to the upstream WebSocket connection.
+- `MAX_WEBSOCKET_PAYLOAD_SIZE`
+  Maximum accepted WebSocket message size in bytes.
+- `FILTER_PROXY_EVENTS`
+  Enables additional filtering for proxy-style events.
+- `BLOCKED_PUBKEYS`
+  Comma-separated hex pubkeys that are always blocked.
+- `WHITELISTED_PUBKEYS`
+  Comma-separated hex pubkeys that bypass some filtering checks where applicable.
+- `BLOCKED_IP_ADDR_*`
+  CIDR entries used to deny client connections immediately.
+- `MUTE_FILTER_*`
+  Regex patterns applied to event content.
+- `PROCESSING_COST_BLOCK_THRESHOLD_MS`
+  Cumulative per-IP `REQ -> EOSE` cost threshold in milliseconds. `0` disables cumulative blocking.
+- `PROCESSING_COST_BLOCK_DURATION_SEC`
+  How long an IP remains blocked after crossing the cumulative threshold.
+- `SINGLE_REQ_PROCESSING_COST_WARN_THRESHOLD_MS`
+  Per-request warning threshold in milliseconds. `0` disables heavy single-request warnings.
+- `MAX_TRACKED_REQS_PER_SOCKET`
+  Maximum number of tracked request payloads kept in memory for one socket.
 
-1. Content Filters
-   contentFilters is an array of regular expression patterns used to filter Nostr event contents. To add a new filtering pattern, simply add a new regular expression pattern to the array. For example:
+## Request-cost tracking
 
-```typescript
-const contentFilters: RegExp[] = [
-  /avive/i,
-  /web3/i,
-  /lnbc/,
-  // Add more patterns below
-];
+For each subscription:
+
+1. The filter stores the incoming `REQ` payload in memory.
+2. When the corresponding `EOSE` arrives from upstream, the elapsed time is measured.
+3. That elapsed time is logged as `processingCostMs`.
+4. The value is added to the cumulative total for the client IP.
+
+This gives you two separate signals:
+
+- Single-request cost
+  Useful for identifying one expensive query.
+- Cumulative per-IP cost
+  Useful for identifying abusive or persistent expensive usage patterns.
+
+### Heavy single requests
+
+When one request exceeds `SINGLE_REQ_PROCESSING_COST_WARN_THRESHOLD_MS`, the filter emits a `HEAVY SINGLE REQ` warning log with:
+
+- `ip`
+- `socketId`
+- `subscriptionId`
+- `processingCostMs`
+- `req`
+- `trackedReqsForSocket`
+
+This is useful when a client never crosses the cumulative block threshold but still sends expensive searches.
+
+### Temporary cumulative blocks
+
+When cumulative per-IP cost reaches `PROCESSING_COST_BLOCK_THRESHOLD_MS`:
+
+- the filter emits `IP PROCESSING COST BLOCKED`
+- all current sockets for that IP receive a block notice and are closed
+- new connections from that IP are rejected until the block expires
+- the IP is automatically unblocked after `PROCESSING_COST_BLOCK_DURATION_SEC`
+- unblock is logged as `IP PROCESSING COST UNBLOCKED`
+
+When the active connection count for an IP becomes zero, the filter emits `IP PROCESSING COST SUMMARY`. If the IP is still blocked at that time, the summary indicates that reset is pending until unblock.
+
+## Logs
+
+Logs are emitted as single-line JSON objects through the internal logger. Example classes of log messages:
+
+- `CONNECTED`
+- `EOSE`
+- `HEAVY SINGLE REQ`
+- `IP PROCESSING COST BLOCKED`
+- `IP PROCESSING COST UNBLOCKED`
+- `IP PROCESSING COST SUMMARY`
+- `CONNECTING BLOCKED`
+- `EVENT`
+- `EVENT BLOCKED`
+
+Typical log inspection commands:
+
+```sh
+docker compose logs --no-color filter
+docker compose logs --no-color filter | rg 'IP PROCESSING COST BLOCKED|HEAVY SINGLE REQ'
+docker compose logs --no-color filter | rg '"msg":"EOSE"'
 ```
 
-2. Blocked Public Keys
-   blockedPubkeys is an array of public keys that represent users you wish to block. To block a user, add their public key to the array. For example:
+## Static files and HTTP behavior
 
-```typescript
-const blockedPubkeys: string[] = [
-  "examplePublicKey1",
-  "examplePublicKey2",
-  // Add more public keys to block below
-];
+- `GET /` returns `static/index.html`
+- other normal HTTP requests under `./static/` are served as static files
+- requests with `Accept: application/nostr+json` are proxied upstream
+
+Static assets are mounted from [static](/home/strfry/nostr-filter/static) into the container by [compose.yaml](/home/strfry/nostr-filter/compose.yaml).
+
+## Development notes
+
+- The project currently compiles TypeScript directly into the container image.
+- There is no dedicated test suite yet.
+- A quick verification command is:
+
+```sh
+npx tsc --noEmit
 ```
 
-3. Client IP Address CIDR Filters
-   cidrRanges is an array of CIDR notations representing IP addresses or ranges that you want to filter. To add a new CIDR filter, simply add the IP address or range to the array. For example:
+## Operational notes
 
-```typescript
-const cidrRanges: string[] = [
-  "1.2.3.4/32",
-  "5.67.89.101/32",
-  // Add more IP addresses or ranges below
-];
-```
-
-Once you have configured the settings according to your needs, the script will filter Nostr event contents, block users, and filter client IP addresses based on your defined patterns and lists.
-
-## Usage
-
-To use nostr-filter, you need a Nostr client that sends messages to the WebSocket server. You can connect to the Nostr relay using the URL ws://<server_address>:<listen_port>.
-
-## Contributing
-
-We welcome contributions from the community. If you would like to contribute to nostr-filter, please follow these steps:
-
-1. Fork the repository.
-2. Create a new branch for your changes.
-3. Make your changes and commit them to your branch.
-4. Submit a pull request with a description of your changes.
-
-Please make sure to follow the code style and conventions used in the project. If you have any questions or need help, feel free to open an issue.
+- The current Docker logging driver is `json-file` with rotation configured in [compose.yaml](/home/strfry/nostr-filter/compose.yaml).
+- The service uses several TCP-related sysctls tuned for relay-style traffic.
+- Request payloads are intentionally kept in memory only up to `MAX_TRACKED_REQS_PER_SOCKET` so the process can log the triggering request when a heavy request or cumulative block occurs.
 
 ## License
 
-nostr-filter is licensed under the MIT License.
+MIT

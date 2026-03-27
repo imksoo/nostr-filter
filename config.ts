@@ -29,6 +29,7 @@ export const cidrRanges = Object.keys(process.env)
   .map((key) => process.env[key]!);
 export const processingCostBlockThresholdMs = parseInt(process.env.PROCESSING_COST_BLOCK_THRESHOLD_MS ?? "0");
 export const processingCostBlockDurationSec = parseInt(process.env.PROCESSING_COST_BLOCK_DURATION_SEC ?? "600");
+export const singleReqProcessingCostWarnThresholdMs = parseInt(process.env.SINGLE_REQ_PROCESSING_COST_WARN_THRESHOLD_MS ?? "10000");
 export const maxTrackedReqsPerSocket = parseInt(process.env.MAX_TRACKED_REQS_PER_SOCKET ?? "100");
 
 export function logStartupConfig(): void {
@@ -43,6 +44,7 @@ export function logStartupConfig(): void {
     blockedIPAddresses: cidrRanges,
     processingCostBlockThresholdMs,
     processingCostBlockDurationSec,
+    singleReqProcessingCostWarnThresholdMs,
     maxTrackedReqsPerSocket,
   });
 }

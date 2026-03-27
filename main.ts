@@ -5,7 +5,7 @@ import url from "url";
 import * as mime from "mime-types";
 import { v7 as uuidv7 } from "uuid";
 import WebSocket from "ws";
-import { cidrRanges, enableForwardReqHeaders, listenPort, logStartupConfig, maxTrackedReqsPerSocket, maxWebsocketPayloadSize, processingCostBlockDurationSec, processingCostBlockThresholdMs, upstreamHttpUrl, upstreamWsForFastBotUrl, upstreamWsUrl } from "./config";
+import { cidrRanges, enableForwardReqHeaders, listenPort, logStartupConfig, maxTrackedReqsPerSocket, maxWebsocketPayloadSize, processingCostBlockDurationSec, processingCostBlockThresholdMs, singleReqProcessingCostWarnThresholdMs, upstreamHttpUrl, upstreamWsForFastBotUrl, upstreamWsUrl } from "./config";
 import { evaluateDownstreamEvent, evaluateUpstreamEvent, ipMatchesCidr } from "./filters";
 import { log } from "./logger";
 import { clearIdleTimeout, getClientAddress, resetIdleTimeout, setIdleTimeout } from "./network";
@@ -149,6 +149,10 @@ function listen(): void {
             const { totalProcessingCostMsForIP, isNewlyBlocked, blockedUntil } = await addProcessingCostForIP(ip, processingCostMs);
 
             log("INFO", withTiming({ msg: "EOSE", ip, port, resultType, socketId, subscriptionId, processingCostMs, totalProcessingCostMsForIP, ...(typeof blockedUntil === "number" ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() } : {}) }));
+
+            if (singleReqProcessingCostWarnThresholdMs > 0 && processingCostMs >= singleReqProcessingCostWarnThresholdMs) {
+              log("WARN", withTiming({ msg: "HEAVY SINGLE REQ", ip, port, socketId, subscriptionId, processingCostMs, singleReqProcessingCostWarnThresholdMs, totalProcessingCostMsForIP, req: reqPayload, trackedReqsForSocket: subscriptionTracker.getTrackedReqsForSocket() }));
+            }
 
             if (isNewlyBlocked) {
               if (typeof blockedUntil === "number") {
