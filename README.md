@@ -34,7 +34,10 @@ In the .env file, you can configure the following options:
 LISTEN_PORT=8081
 UPSTREAM_HTTP_URL=http://192.168.1.1:8080
 UPSTREAM_WS_URL=ws://192.168.1.1:8080
+PROCESSING_COST_BLOCK_THRESHOLD_MS=60000
 ```
+
+`PROCESSING_COST_BLOCK_THRESHOLD_MS` is the cumulative per-IP processing cost threshold in milliseconds. The filter measures the elapsed time from each `REQ` to its corresponding `EOSE`, adds that cost to the client IP total, logs it, and temporarily blocks the IP when the cumulative total reaches the threshold. The cumulative total is reset and logged when the number of active connections for that IP becomes zero.
 
 In the filter.ts file, you can configure the following options:
 

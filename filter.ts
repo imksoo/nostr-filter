@@ -108,6 +108,9 @@ console.info(
     upstreamWsForFastBotUrl,
     contentFilters: contentFilters.map(regex => `/${regex.source}/${regex.flags}`),
     blockedIPAddresses: cidrRanges,
+    processingCostBlockThresholdMs: parseInt(
+      process.env.PROCESSING_COST_BLOCK_THRESHOLD_MS ?? "0",
+    ),
   }),
 );
 
@@ -115,8 +118,74 @@ console.info(
 let connectionCount = 0;
 // IPアドレスごとの接続数
 const connectionCountsByIP = new Map<string, number>();
+// IPアドレスごとのREQ->EOSE累積処理コスト
+const totalProcessingCostMsByIP = new Map<string, number>();
+// 累積処理コスト超過で一時的にブロック中のIPアドレス
+const blockedIPsByProcessingCost = new Set<string>();
+// IPアドレスごとのアクティブな下流ソケット
+const activeSocketsByIP = new Map<string, Set<WebSocket>>();
 // Mutexインスタンスを作成
 const connectionCountMutex = new Mutex();
+const processingCostBlockThresholdMs: number = parseInt(
+  process.env.PROCESSING_COST_BLOCK_THRESHOLD_MS ?? "0",
+);
+
+async function registerSocketForIP(
+  ip: string,
+  socket: WebSocket,
+): Promise<void> {
+  await connectionCountMutex.runExclusive(async () => {
+    const sockets = activeSocketsByIP.get(ip) ?? new Set<WebSocket>();
+    sockets.add(socket);
+    activeSocketsByIP.set(ip, sockets);
+  });
+}
+
+async function unregisterSocketForIP(
+  ip: string,
+  socket: WebSocket,
+): Promise<void> {
+  await connectionCountMutex.runExclusive(async () => {
+    const sockets = activeSocketsByIP.get(ip);
+    if (!sockets) {
+      return;
+    }
+    sockets.delete(socket);
+    if (sockets.size === 0) {
+      activeSocketsByIP.delete(ip);
+    }
+  });
+}
+
+async function addProcessingCostForIP(
+  ip: string,
+  processingCostMs: number,
+): Promise<{ totalProcessingCostMsForIP: number; isNewlyBlocked: boolean }> {
+  let totalProcessingCostMsForIP = 0;
+  let isNewlyBlocked = false;
+  await connectionCountMutex.runExclusive(async () => {
+    totalProcessingCostMsForIP =
+      (totalProcessingCostMsByIP.get(ip) ?? 0) + processingCostMs;
+    totalProcessingCostMsByIP.set(ip, totalProcessingCostMsForIP);
+    if (
+      processingCostBlockThresholdMs > 0 &&
+      totalProcessingCostMsForIP >= processingCostBlockThresholdMs &&
+      !blockedIPsByProcessingCost.has(ip)
+    ) {
+      blockedIPsByProcessingCost.add(ip);
+      isNewlyBlocked = true;
+    }
+  });
+  return { totalProcessingCostMsForIP, isNewlyBlocked };
+}
+
+async function getSocketsForIP(ip: string): Promise<WebSocket[]> {
+  let sockets: WebSocket[] = [];
+  await connectionCountMutex.runExclusive(async () => {
+    sockets = Array.from(activeSocketsByIP.get(ip) ?? []);
+  });
+  return sockets;
+}
 
 function loggingMemoryUsage(): void {
   const currentTime = new Date().toISOString();
@@ -208,6 +277,8 @@ function listen(): void {
       const subscriptionIdAndPortNumber = new Map<string, number>();
       // サブスクリプションIDごとの転送量
       const transferredSizePerSubscriptionId = new Map<string, number>();
+      // サブスクリプションIDごとのREQ受信時刻
+      const reqStartedAtPerSubscriptionId = new Map<string, number>();
       // Mutexインスタンスを作成
       const subscriptionSizeMutex = new Mutex();
 
@@ -236,9 +307,6 @@ function listen(): void {
 
       // クライアントとの接続が確立したら、アイドルタイムアウトを設定
       setIdleTimeout(downstreamSocket);
-
-      // 接続が確立されるたびにカウントを増やす
-      connectionCount++;
 
       // 接続元のクライアントIPを取得
       const ip =
@@ -309,10 +377,51 @@ function listen(): void {
 
       // IPごとの接続数を取得・更新
       let connectionCountForIP = 0;
+      let totalProcessingCostMsForIP = 0;
+      let isProcessingCostBlocked = false;
       await connectionCountMutex.runExclusive(async () => {
         connectionCountForIP = (connectionCountsByIP.get(ip) ?? 0) + 1;
+        totalProcessingCostMsForIP = totalProcessingCostMsByIP.get(ip) ?? 0;
+        isProcessingCostBlocked = blockedIPsByProcessingCost.has(ip);
       });
-      if (connectionCountForIP > 100) {
+      if (isProcessingCostBlocked) {
+        const because = "Blocked by accumulated processing cost";
+        console.warn(
+          JSON.stringify(
+            withTiming({
+              msg: "CONNECTING BLOCKED",
+              because,
+              ip,
+              port,
+              socketId,
+              connectionCountForIP,
+              totalProcessingCostMsForIP,
+              processingCostBlockThresholdMs,
+            }),
+          ),
+        );
+        const blockedMessage = JSON.stringify([
+          "NOTICE",
+          `blocked: ${because}`,
+        ]);
+        console.log(
+          JSON.stringify(
+            withTiming({
+              msg: "BLOCKED NOTICE",
+              ip,
+              port,
+              socketId,
+              connectionCountForIP,
+              because,
+              blockedMessage,
+            }),
+          ),
+        );
+        upstreamSocket.close();
+        downstreamSocket.send(blockedMessage);
+        downstreamSocket.close(1008, "Forbidden");
+        return;
+      } else if (connectionCountForIP > 100) {
         const because = "Blocked by too many connections";
         console.warn(
           JSON.stringify(
@@ -348,6 +457,7 @@ function listen(): void {
         downstreamSocket.close(1008, "Too many requests.");
         return;
       } else {
+        connectionCount++;
         console.info(
           JSON.stringify(
             withTiming({
@@ -361,6 +471,7 @@ function listen(): void {
           ),
         );
         connectionCountsByIP.set(ip, connectionCountForIP);
+        await registerSocketForIP(ip, downstreamSocket);
       }
 
       // クライアントからメッセージを受信したとき
@@ -461,6 +572,7 @@ function listen(): void {
           const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
           subscriptionIdAndIPAddress.set(socketAndSubscriptionId, ip);
           subscriptionIdAndPortNumber.set(socketAndSubscriptionId, port);
+          reqStartedAtPerSubscriptionId.set(socketAndSubscriptionId, Date.now());
           // REQイベントの内容をコンソールにログ出力
           console.log(
             JSON.stringify(
@@ -483,6 +595,7 @@ function listen(): void {
         } else if (event[0] === "CLOSE") {
           const subscriptionId = event[1];
           const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
+          reqStartedAtPerSubscriptionId.delete(socketAndSubscriptionId);
           subscriptionIdAndIPAddress.set(
             socketAndSubscriptionId,
             ip + " CLOSED",
@@ -672,10 +785,22 @@ function listen(): void {
         connectionCount--; // 接続が閉じられるたびにカウントを減らす
 
         let connectionCountForIP = 1;
+        let totalProcessingCostMsForIP = 0;
+        let shouldResetIPState = false;
         await connectionCountMutex.runExclusive(async () => {
           connectionCountForIP = connectionCountsByIP.get(ip) ?? 1;
-          connectionCountsByIP.set(ip, connectionCountForIP - 1);
+          const nextConnectionCountForIP = connectionCountForIP - 1;
+          totalProcessingCostMsForIP = totalProcessingCostMsByIP.get(ip) ?? 0;
+          if (nextConnectionCountForIP <= 0) {
+            connectionCountsByIP.delete(ip);
+            totalProcessingCostMsByIP.delete(ip);
+            blockedIPsByProcessingCost.delete(ip);
+            shouldResetIPState = true;
+          } else {
+            connectionCountsByIP.set(ip, nextConnectionCountForIP);
+          }
         });
+        await unregisterSocketForIP(ip, downstreamSocket);
         console.log(
           JSON.stringify(
             withTiming({
@@ -687,6 +812,18 @@ function listen(): void {
             }),
           ),
         );
+        if (shouldResetIPState) {
+          console.info(
+            JSON.stringify(
+              withTiming({
+                msg: "IP PROCESSING COST SUMMARY",
+                ip,
+                socketId,
+                totalProcessingCostMsForIP,
+              }),
+            ),
+          );
+        }
         upstreamSocket.close();
         clearIdleTimeout(downstreamSocket);
       });
@@ -820,6 +957,73 @@ function listen(): void {
                 }),
               ),
             );
+          } else if (resultType === "EOSE") {
+            const subscriptionId = result[1];
+            const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
+            const reqStartedAt = reqStartedAtPerSubscriptionId.get(
+              socketAndSubscriptionId,
+            );
+            const processingCostMs =
+              typeof reqStartedAt === "number" ? Date.now() - reqStartedAt : undefined;
+            if (typeof processingCostMs === "number") {
+              reqStartedAtPerSubscriptionId.delete(socketAndSubscriptionId);
+              const {
+                totalProcessingCostMsForIP,
+                isNewlyBlocked,
+              } = await addProcessingCostForIP(ip, processingCostMs);
+              console.info(
+                JSON.stringify(
+                  withTiming({
+                    msg: "EOSE",
+                    ip,
+                    port,
+                    resultType,
+                    socketId,
+                    subscriptionId,
+                    processingCostMs,
+                    totalProcessingCostMsForIP,
+                  }),
+                ),
+              );
+              if (isNewlyBlocked) {
+                console.warn(
+                  JSON.stringify(
+                    withTiming({
+                      msg: "IP PROCESSING COST BLOCKED",
+                      ip,
+                      port,
+                      socketId,
+                      subscriptionId,
+                      processingCostMs,
+                      totalProcessingCostMsForIP,
+                      processingCostBlockThresholdMs,
+                    }),
+                  ),
+                );
+                const blockedMessage = JSON.stringify([
+                  "NOTICE",
+                  "blocked: Blocked by accumulated processing cost",
+                ]);
+                const sockets = await getSocketsForIP(ip);
+                for (const socket of sockets) {
+                  socket.send(blockedMessage);
+                  socket.close(1008, "Forbidden");
+                }
+              }
+            } else {
+              console.info(
+                JSON.stringify(
+                  withTiming({
+                    msg: "EOSE",
+                    ip,
+                    port,
+                    resultType,
+                    socketId,
+                    subscriptionId,
+                  }),
+                ),
+              );
+            }
           } else if (resultType === "INVALID") {
             shouldRelay = false;
             because = result[1];
