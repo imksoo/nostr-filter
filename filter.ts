@@ -111,6 +111,9 @@ console.info(
     processingCostBlockThresholdMs: parseInt(
       process.env.PROCESSING_COST_BLOCK_THRESHOLD_MS ?? "0",
     ),
+    processingCostBlockDurationSec: parseInt(
+      process.env.PROCESSING_COST_BLOCK_DURATION_SEC ?? "600",
+    ),
   }),
 );
 
@@ -122,12 +125,19 @@ const connectionCountsByIP = new Map<string, number>();
 const totalProcessingCostMsByIP = new Map<string, number>();
 // 累積処理コスト超過で一時的にブロック中のIPアドレス
 const blockedIPsByProcessingCost = new Set<string>();
+// IPアドレスごとの処理コストブロック解除予定時刻
+const processingCostBlockedUntilByIP = new Map<string, number>();
+// IPアドレスごとの処理コストブロック解除タイマー
+const processingCostBlockTimeoutsByIP = new Map<string, NodeJS.Timeout>();
 // IPアドレスごとのアクティブな下流ソケット
 const activeSocketsByIP = new Map<string, Set<WebSocket>>();
 // Mutexインスタンスを作成
 const connectionCountMutex = new Mutex();
 const processingCostBlockThresholdMs: number = parseInt(
   process.env.PROCESSING_COST_BLOCK_THRESHOLD_MS ?? "0",
+);
+const processingCostBlockDurationSec: number = parseInt(
+  process.env.PROCESSING_COST_BLOCK_DURATION_SEC ?? "600",
 );
 
 async function registerSocketForIP(
@@ -160,9 +170,14 @@ async function unregisterSocketForIP(
 async function addProcessingCostForIP(
   ip: string,
   processingCostMs: number,
-): Promise<{ totalProcessingCostMsForIP: number; isNewlyBlocked: boolean }> {
+): Promise<{
+  totalProcessingCostMsForIP: number;
+  isNewlyBlocked: boolean;
+  blockedUntil?: number;
+}> {
   let totalProcessingCostMsForIP = 0;
   let isNewlyBlocked = false;
+  let blockedUntil: number | undefined;
   await connectionCountMutex.runExclusive(async () => {
     totalProcessingCostMsForIP =
       (totalProcessingCostMsByIP.get(ip) ?? 0) + processingCostMs;
@@ -173,10 +188,12 @@ async function addProcessingCostForIP(
       !blockedIPsByProcessingCost.has(ip)
     ) {
       blockedIPsByProcessingCost.add(ip);
+      blockedUntil = Date.now() + processingCostBlockDurationSec * 1000;
+      processingCostBlockedUntilByIP.set(ip, blockedUntil);
       isNewlyBlocked = true;
     }
   });
-  return { totalProcessingCostMsForIP, isNewlyBlocked };
+  return { totalProcessingCostMsForIP, isNewlyBlocked, blockedUntil };
 }
 
 async function getSocketsForIP(ip: string): Promise<WebSocket[]> {
@@ -185,6 +202,50 @@ async function getSocketsForIP(ip: string): Promise<WebSocket[]> {
     sockets = Array.from(activeSocketsByIP.get(ip) ?? []);
   });
   return sockets;
+}
+
+async function unblockIPByProcessingCost(ip: string): Promise<void> {
+  let totalProcessingCostMsForIP = 0;
+  let hadBlockedState = false;
+  await connectionCountMutex.runExclusive(async () => {
+    hadBlockedState = blockedIPsByProcessingCost.delete(ip);
+    totalProcessingCostMsForIP = totalProcessingCostMsByIP.get(ip) ?? 0;
+    totalProcessingCostMsByIP.delete(ip);
+    processingCostBlockedUntilByIP.delete(ip);
+    const timeoutId = processingCostBlockTimeoutsByIP.get(ip);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      processingCostBlockTimeoutsByIP.delete(ip);
+    }
+  });
+  if (hadBlockedState) {
+    console.info(
+      JSON.stringify({
+        msg: "IP PROCESSING COST UNBLOCKED",
+        ip,
+        totalProcessingCostMsForIP,
+        processingCostBlockDurationSec,
+        currentTime: new Date().toISOString(),
+      }),
+    );
+  }
+}
+
+async function scheduleProcessingCostUnblock(
+  ip: string,
+  blockedUntil: number,
+): Promise<void> {
+  await connectionCountMutex.runExclusive(async () => {
+    const currentTimeout = processingCostBlockTimeoutsByIP.get(ip);
+    if (currentTimeout) {
+      clearTimeout(currentTimeout);
+    }
+    const delayMs = Math.max(0, blockedUntil - Date.now());
+    const timeoutId = setTimeout(() => {
+      void unblockIPByProcessingCost(ip);
+    }, delayMs);
+    processingCostBlockTimeoutsByIP.set(ip, timeoutId);
+  });
 }
 
 function loggingMemoryUsage(): void {
@@ -379,10 +440,29 @@ function listen(): void {
       let connectionCountForIP = 0;
       let totalProcessingCostMsForIP = 0;
       let isProcessingCostBlocked = false;
+      let processingCostBlockedUntil: number | undefined;
       await connectionCountMutex.runExclusive(async () => {
         connectionCountForIP = (connectionCountsByIP.get(ip) ?? 0) + 1;
         totalProcessingCostMsForIP = totalProcessingCostMsByIP.get(ip) ?? 0;
         isProcessingCostBlocked = blockedIPsByProcessingCost.has(ip);
+        processingCostBlockedUntil = processingCostBlockedUntilByIP.get(ip);
+        if (
+          isProcessingCostBlocked &&
+          typeof processingCostBlockedUntil === "number" &&
+          processingCostBlockedUntil <= Date.now()
+        ) {
+          const timeoutId = processingCostBlockTimeoutsByIP.get(ip);
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+          }
+          blockedIPsByProcessingCost.delete(ip);
+          processingCostBlockedUntilByIP.delete(ip);
+          processingCostBlockTimeoutsByIP.delete(ip);
+          totalProcessingCostMsByIP.delete(ip);
+          totalProcessingCostMsForIP = 0;
+          isProcessingCostBlocked = false;
+          processingCostBlockedUntil = undefined;
+        }
       });
       if (isProcessingCostBlocked) {
         const because = "Blocked by accumulated processing cost";
@@ -397,6 +477,7 @@ function listen(): void {
               connectionCountForIP,
               totalProcessingCostMsForIP,
               processingCostBlockThresholdMs,
+              processingCostBlockedUntil,
             }),
           ),
         );
@@ -574,7 +655,7 @@ function listen(): void {
           subscriptionIdAndPortNumber.set(socketAndSubscriptionId, port);
           reqStartedAtPerSubscriptionId.set(socketAndSubscriptionId, Date.now());
           // REQイベントの内容をコンソールにログ出力
-          console.log(
+          console.info(
             JSON.stringify(
               withTiming({
                 msg: "REQ",
@@ -787,15 +868,18 @@ function listen(): void {
         let connectionCountForIP = 1;
         let totalProcessingCostMsForIP = 0;
         let shouldResetIPState = false;
+        let isProcessingCostBlocked = false;
         await connectionCountMutex.runExclusive(async () => {
           connectionCountForIP = connectionCountsByIP.get(ip) ?? 1;
           const nextConnectionCountForIP = connectionCountForIP - 1;
           totalProcessingCostMsForIP = totalProcessingCostMsByIP.get(ip) ?? 0;
+          isProcessingCostBlocked = blockedIPsByProcessingCost.has(ip);
           if (nextConnectionCountForIP <= 0) {
             connectionCountsByIP.delete(ip);
-            totalProcessingCostMsByIP.delete(ip);
-            blockedIPsByProcessingCost.delete(ip);
-            shouldResetIPState = true;
+            if (!isProcessingCostBlocked) {
+              totalProcessingCostMsByIP.delete(ip);
+              shouldResetIPState = true;
+            }
           } else {
             connectionCountsByIP.set(ip, nextConnectionCountForIP);
           }
@@ -812,7 +896,7 @@ function listen(): void {
             }),
           ),
         );
-        if (shouldResetIPState) {
+        if (shouldResetIPState || (connectionCountForIP - 1 <= 0 && isProcessingCostBlocked)) {
           console.info(
             JSON.stringify(
               withTiming({
@@ -820,6 +904,9 @@ function listen(): void {
                 ip,
                 socketId,
                 totalProcessingCostMsForIP,
+                ...(isProcessingCostBlocked
+                  ? { resetPendingUntilUnblock: true }
+                  : {}),
               }),
             ),
           );
@@ -970,6 +1057,7 @@ function listen(): void {
               const {
                 totalProcessingCostMsForIP,
                 isNewlyBlocked,
+                blockedUntil,
               } = await addProcessingCostForIP(ip, processingCostMs);
               console.info(
                 JSON.stringify(
@@ -982,10 +1070,16 @@ function listen(): void {
                     subscriptionId,
                     processingCostMs,
                     totalProcessingCostMsForIP,
+                    ...(typeof blockedUntil === "number"
+                      ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() }
+                      : {}),
                   }),
                 ),
               );
               if (isNewlyBlocked) {
+                if (typeof blockedUntil === "number") {
+                  await scheduleProcessingCostUnblock(ip, blockedUntil);
+                }
                 console.warn(
                   JSON.stringify(
                     withTiming({
@@ -997,6 +1091,9 @@ function listen(): void {
                       processingCostMs,
                       totalProcessingCostMsForIP,
                       processingCostBlockThresholdMs,
+                      ...(typeof blockedUntil === "number"
+                        ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() }
+                        : {}),
                     }),
                   ),
                 );

@@ -35,9 +35,10 @@ LISTEN_PORT=8081
 UPSTREAM_HTTP_URL=http://192.168.1.1:8080
 UPSTREAM_WS_URL=ws://192.168.1.1:8080
 PROCESSING_COST_BLOCK_THRESHOLD_MS=60000
+PROCESSING_COST_BLOCK_DURATION_SEC=600
 ```
 
-`PROCESSING_COST_BLOCK_THRESHOLD_MS` is the cumulative per-IP processing cost threshold in milliseconds. The filter measures the elapsed time from each `REQ` to its corresponding `EOSE`, adds that cost to the client IP total, logs it, and temporarily blocks the IP when the cumulative total reaches the threshold. The cumulative total is reset and logged when the number of active connections for that IP becomes zero.
+`PROCESSING_COST_BLOCK_THRESHOLD_MS` is the cumulative per-IP processing cost threshold in milliseconds. `PROCESSING_COST_BLOCK_DURATION_SEC` is the temporary block duration in seconds after the threshold is reached. The filter measures the elapsed time from each `REQ` to its corresponding `EOSE`, adds that cost to the client IP total, logs it, temporarily blocks the IP when the cumulative total reaches the threshold, and automatically unblocks and resets that IP after the configured duration. When the number of active connections for that IP becomes zero, a summary log is also emitted.
 
 In the filter.ts file, you can configure the following options:
 
