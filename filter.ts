@@ -114,6 +114,9 @@ console.info(
     processingCostBlockDurationSec: parseInt(
       process.env.PROCESSING_COST_BLOCK_DURATION_SEC ?? "600",
     ),
+    maxTrackedReqsPerSocket: parseInt(
+      process.env.MAX_TRACKED_REQS_PER_SOCKET ?? "100",
+    ),
   }),
 );
 
@@ -142,6 +145,113 @@ const processingCostBlockDurationSec: number = parseInt(
 const maxTrackedReqsPerSocket = parseInt(
   process.env.MAX_TRACKED_REQS_PER_SOCKET ?? "100",
 );
+
+type RelayDecision = {
+  shouldRelay: boolean;
+  because: string;
+};
+
+type ClientAddress = {
+  ip: string;
+  port: number;
+};
+
+type SubscriptionState = {
+  ipAddresses: Map<string, string>;
+  portNumbers: Map<string, number>;
+  transferredSizes: Map<string, number>;
+  reqStartedAt: Map<string, number>;
+  reqPayloads: Map<string, unknown>;
+};
+
+function getClientAddress(req: http.IncomingMessage): ClientAddress {
+  const ip =
+    (typeof req.headers["cloudfront-viewer-address"] === "string"
+      ? req.headers["cloudfront-viewer-address"]
+        .split(":")
+        .slice(0, -1)
+        .join(":")
+      : undefined) ||
+    (typeof req.headers["x-real-ip"] === "string"
+      ? req.headers["x-real-ip"]
+      : undefined) ||
+    (typeof req.headers["x-forwarded-for"] === "string"
+      ? req.headers["x-forwarded-for"].split(",")[0].trim()
+      : undefined) ||
+    (typeof req.socket.remoteAddress === "string"
+      ? req.socket.remoteAddress
+      : "unknown-ip-addr");
+  const port =
+    (typeof req.headers["cloudfront-viewer-address"] === "string"
+      ? parseInt(
+        req.headers["cloudfront-viewer-address"].split(":").slice(-1)[0],
+      )
+      : undefined) ||
+    (typeof req.headers["x-real-port"] === "string"
+      ? parseInt(req.headers["x-real-port"])
+      : 0);
+  return { ip, port };
+}
+
+function evaluateKind1Event(
+  event: { content: string; pubkey: string; tags: string[][] },
+  options: { filterProxyTags: boolean },
+): RelayDecision {
+  for (const filter of contentFilters) {
+    if (filter.test(event.content)) {
+      return { shouldRelay: false, because: "Blocked event by content filter" };
+    }
+  }
+
+  for (const block of blockedPubkeys) {
+    if (event.pubkey === block) {
+      return { shouldRelay: false, because: "Blocked event by pubkey" };
+    }
+  }
+
+  if (options.filterProxyTags) {
+    for (const tag of event.tags) {
+      if (tag[0] === "proxy") {
+        return { shouldRelay: false, because: "Blocked event by proxied event" };
+      }
+    }
+  }
+
+  return { shouldRelay: true, because: "" };
+}
+
+function evaluateDownstreamEvent(event: any[]): RelayDecision {
+  if (event[0] !== "EVENT") {
+    return { shouldRelay: true, because: "" };
+  }
+
+  let decision: RelayDecision = { shouldRelay: true, because: "" };
+  if (event[1].kind === 1) {
+    decision = evaluateKind1Event(event[1], { filterProxyTags: filterProxyEvents });
+  }
+
+  if (decision.shouldRelay && whitelistedPubkeys.length > 0) {
+    const isWhitelistPubkey = whitelistedPubkeys.includes(event[1].pubkey);
+    if (!isWhitelistPubkey) {
+      return {
+        shouldRelay: false,
+        because: "Only whitelisted pubkey can write events",
+      };
+    }
+  }
+
+  return decision;
+}
+
+function evaluateUpstreamEvent(event: any[]): RelayDecision {
+  if (event[0] === "INVALID") {
+    return { shouldRelay: false, because: event[1] };
+  }
+  if (event[0] === "EVENT" && event[2].kind === 1) {
+    return evaluateKind1Event(event[2], { filterProxyTags: false });
+  }
+  return { shouldRelay: true, because: "" };
+}
 
 async function registerSocketForIP(
   ip: string,
@@ -336,15 +446,13 @@ function listen(): void {
   wss.on(
     "connection",
     async (downstreamSocket: WebSocket, req: http.IncomingMessage) => {
-      // サブスクリプションIDに紐付くIPアドレス
-      const subscriptionIdAndIPAddress = new Map<string, string>();
-      const subscriptionIdAndPortNumber = new Map<string, number>();
-      // サブスクリプションIDごとの転送量
-      const transferredSizePerSubscriptionId = new Map<string, number>();
-      // サブスクリプションIDごとのREQ受信時刻
-      const reqStartedAtPerSubscriptionId = new Map<string, number>();
-      // サブスクリプションIDごとの直近REQ内容
-      const reqPayloadPerSubscriptionId = new Map<string, unknown>();
+      const subscriptionState: SubscriptionState = {
+        ipAddresses: new Map<string, string>(),
+        portNumbers: new Map<string, number>(),
+        transferredSizes: new Map<string, number>(),
+        reqStartedAt: new Map<string, number>(),
+        reqPayloads: new Map<string, unknown>(),
+      };
       // Mutexインスタンスを作成
       const subscriptionSizeMutex = new Mutex();
 
@@ -363,51 +471,54 @@ function listen(): void {
         ...(includeElapsed ? { elapsedMs: elapsedMs() } : {}),
       });
 
-      // Check whether we want to forward original request headers to the upstream server
-      // This will be useful if the upstream server need original request headers to do operations like rate-limiting, etc.
-      let wsClientOptions = enableForwardReqHeaders ? { headers: req.headers } : undefined;
+      function getSocketSubscriptionId(subscriptionId: string): string {
+        return `${socketId}:${subscriptionId}`;
+      }
 
-      // 上流となるリレーサーバーと接続
-      let upstreamSocket = new WebSocket(upstreamWsUrl, wsClientOptions);
-      connectUpstream(upstreamSocket, downstreamSocket);
+      function rememberSubscription(subscriptionId: string): string {
+        const socketAndSubscriptionId = getSocketSubscriptionId(subscriptionId);
+        subscriptionState.ipAddresses.set(socketAndSubscriptionId, ip);
+        subscriptionState.portNumbers.set(socketAndSubscriptionId, port);
+        return socketAndSubscriptionId;
+      }
 
-      // クライアントとの接続が確立したら、アイドルタイムアウトを設定
-      setIdleTimeout(downstreamSocket);
+      function forgetSubscription(subscriptionId: string): string {
+        const socketAndSubscriptionId = getSocketSubscriptionId(subscriptionId);
+        subscriptionState.reqStartedAt.delete(socketAndSubscriptionId);
+        subscriptionState.reqPayloads.delete(socketAndSubscriptionId);
+        return socketAndSubscriptionId;
+      }
 
-      // 接続元のクライアントIPを取得
-      const ip =
-        (typeof req.headers["cloudfront-viewer-address"] === "string"
-          ? req.headers["cloudfront-viewer-address"]
-            .split(":")
-            .slice(0, -1)
-            .join(":")
-          : undefined) ||
-        (typeof req.headers["x-real-ip"] === "string"
-          ? req.headers["x-real-ip"]
-          : undefined) ||
-        (typeof req.headers["x-forwarded-for"] === "string"
-          ? req.headers["x-forwarded-for"].split(",")[0].trim()
-          : undefined) ||
-        (typeof req.socket.remoteAddress === "string"
-          ? req.socket.remoteAddress
-          : "unknown-ip-addr");
+      function trackReq(subscriptionId: string, reqPayload: unknown): void {
+        const socketAndSubscriptionId = rememberSubscription(subscriptionId);
+        subscriptionState.reqStartedAt.set(socketAndSubscriptionId, Date.now());
+        subscriptionState.reqPayloads.set(socketAndSubscriptionId, reqPayload);
+        if (subscriptionState.reqPayloads.size > maxTrackedReqsPerSocket) {
+          const oldestTrackedSubscriptionId =
+            subscriptionState.reqPayloads.keys().next().value;
+          if (oldestTrackedSubscriptionId) {
+            subscriptionState.reqPayloads.delete(oldestTrackedSubscriptionId);
+          }
+        }
+      }
 
-      // 接続元のクライアントPortを取得
-      const port =
-        (typeof req.headers["cloudfront-viewer-address"] === "string"
-          ? parseInt(
-            req.headers["cloudfront-viewer-address"].split(":").slice(-1)[0],
+      function getTrackedReqsForSocket(): Array<{ subscriptionId: string; req: unknown }> {
+        return Array.from(subscriptionState.reqPayloads.entries())
+          .filter(([trackedSocketAndSubscriptionId]) =>
+            trackedSocketAndSubscriptionId.startsWith(`${socketId}:`)
           )
-          : undefined) ||
-        (typeof req.headers["x-real-port"] === "string"
-          ? parseInt(req.headers["x-real-port"])
-          : 0);
+          .map(([trackedSocketAndSubscriptionId, trackedReq]) => ({
+            subscriptionId: trackedSocketAndSubscriptionId.slice(socketId.length + 1),
+            req: trackedReq,
+          }));
+      }
 
-      // IPアドレスが指定したCIDR範囲内にあるかどうかを判断
-      const isIpBlocked = cidrRanges.some((cidr) => ipMatchesCidr(ip, cidr));
-      if (isIpBlocked) {
-        const because = "Blocked by CIDR filter";
-        // IPアドレスがCIDR範囲内にある場合、接続を拒否
+      function sendBlockedNoticeAndClose(
+        because: string,
+        closeCode: number,
+        closeReason: string,
+        extraPayload: Record<string, unknown> = {},
+      ): void {
         console.warn(
           JSON.stringify(
             withTiming({
@@ -416,6 +527,7 @@ function listen(): void {
               ip,
               port,
               socketId,
+              ...extraPayload,
             }),
           ),
         );
@@ -432,12 +544,33 @@ function listen(): void {
               socketId,
               because,
               blockedMessage,
+              ...extraPayload,
             }),
           ),
         );
         upstreamSocket.close();
         downstreamSocket.send(blockedMessage);
-        downstreamSocket.close(1008, "Forbidden");
+        downstreamSocket.close(closeCode, closeReason);
+      }
+
+      // Check whether we want to forward original request headers to the upstream server
+      // This will be useful if the upstream server need original request headers to do operations like rate-limiting, etc.
+      let wsClientOptions = enableForwardReqHeaders ? { headers: req.headers } : undefined;
+
+      // 上流となるリレーサーバーと接続
+      let upstreamSocket = new WebSocket(upstreamWsUrl, wsClientOptions);
+      connectUpstream(upstreamSocket, downstreamSocket);
+
+      // クライアントとの接続が確立したら、アイドルタイムアウトを設定
+      setIdleTimeout(downstreamSocket);
+
+      const { ip, port } = getClientAddress(req);
+
+      // IPアドレスが指定したCIDR範囲内にあるかどうかを判断
+      const isIpBlocked = cidrRanges.some((cidr) => ipMatchesCidr(ip, cidr));
+      if (isIpBlocked) {
+        // IPアドレスがCIDR範囲内にある場合、接続を拒否
+        sendBlockedNoticeAndClose("Blocked by CIDR filter", 1008, "Forbidden");
         return;
       }
 
@@ -470,77 +603,25 @@ function listen(): void {
         }
       });
       if (isProcessingCostBlocked) {
-        const because = "Blocked by accumulated processing cost";
-        console.warn(
-          JSON.stringify(
-            withTiming({
-              msg: "CONNECTING BLOCKED",
-              because,
-              ip,
-              port,
-              socketId,
-              connectionCountForIP,
-              totalProcessingCostMsForIP,
-              processingCostBlockThresholdMs,
-              processingCostBlockedUntil,
-            }),
-          ),
+        sendBlockedNoticeAndClose(
+          "Blocked by accumulated processing cost",
+          1008,
+          "Forbidden",
+          {
+            connectionCountForIP,
+            totalProcessingCostMsForIP,
+            processingCostBlockThresholdMs,
+            processingCostBlockedUntil,
+          },
         );
-        const blockedMessage = JSON.stringify([
-          "NOTICE",
-          `blocked: ${because}`,
-        ]);
-        console.log(
-          JSON.stringify(
-            withTiming({
-              msg: "BLOCKED NOTICE",
-              ip,
-              port,
-              socketId,
-              connectionCountForIP,
-              because,
-              blockedMessage,
-            }),
-          ),
-        );
-        upstreamSocket.close();
-        downstreamSocket.send(blockedMessage);
-        downstreamSocket.close(1008, "Forbidden");
         return;
       } else if (connectionCountForIP > 100) {
-        const because = "Blocked by too many connections";
-        console.warn(
-          JSON.stringify(
-            withTiming({
-              msg: "CONNECTING BLOCKED",
-              because,
-              ip,
-              port,
-              socketId,
-              connectionCountForIP,
-            }),
-          ),
+        sendBlockedNoticeAndClose(
+          "Blocked by too many connections",
+          1008,
+          "Too many requests.",
+          { connectionCountForIP },
         );
-        const blockedMessage = JSON.stringify([
-          "NOTICE",
-          `blocked: ${because}`,
-        ]);
-        console.log(
-          JSON.stringify(
-            withTiming({
-              msg: "BLOCKED NOTICE",
-              ip,
-              port,
-              socketId,
-              connectionCountForIP,
-              because,
-              blockedMessage,
-            }),
-          ),
-        );
-        upstreamSocket.close();
-        downstreamSocket.send(blockedMessage);
-        downstreamSocket.close(1008, "Too many requests.");
         return;
       } else {
         connectionCount++;
@@ -579,50 +660,10 @@ function listen(): void {
         let isMessageEdited = false;
         // kind1だけフィルタリングを行う
         if (event[0] === "EVENT") {
-          const subscriptionId = event[1].id;
-          const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
-          subscriptionIdAndIPAddress.set(socketAndSubscriptionId, ip);
-          subscriptionIdAndPortNumber.set(socketAndSubscriptionId, port);
-
-          if (event[1].kind === 1) {
-            // 正規表現パターンとのマッチ判定
-            for (const filter of contentFilters) {
-              if (filter.test(event[1].content)) {
-                shouldRelay = false;
-                because = "Blocked event by content filter";
-                break;
-              }
-            }
-            // ブロックする公開鍵のリストとのマッチ判定
-            for (const block of blockedPubkeys) {
-              if (event[1].pubkey === block) {
-                shouldRelay = false;
-                because = "Blocked event by pubkey";
-                break;
-              }
-            }
-
-            // Proxyイベントをフィルターする
-            if (filterProxyEvents) {
-              for (const tag of event[1].tags) {
-                if (tag[0] === "proxy") {
-                  shouldRelay = false;
-                  because = "Blocked event by proxied event";
-                  break;
-                }
-              }
-            }
-          }
-
-          // Allow write any event only for whitelisted pubkeys in downstream messages
-          if (shouldRelay && whitelistedPubkeys.length > 0) {
-            const isWhitelistPubkey = whitelistedPubkeys.includes(event[1].pubkey);
-
-            if (!isWhitelistPubkey) {
-              shouldRelay = false;
-              because = "Only whitelisted pubkey can write events";
-            }
-          }
+          rememberSubscription(event[1].id);
+          const decision = evaluateDownstreamEvent(event);
+          shouldRelay = decision.shouldRelay;
+          because = decision.because;
 
           // イベント内容とフィルターの判定結果をコンソールにログ出力
           if (shouldRelay) {
@@ -655,33 +696,18 @@ function listen(): void {
           }
         } else if (event[0] === "REQ") {
           const subscriptionId = event[1];
-          const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
-          subscriptionIdAndIPAddress.set(socketAndSubscriptionId, ip);
-          subscriptionIdAndPortNumber.set(socketAndSubscriptionId, port);
-          reqStartedAtPerSubscriptionId.set(socketAndSubscriptionId, Date.now());
-          reqPayloadPerSubscriptionId.set(socketAndSubscriptionId, event[2]);
-          if (reqPayloadPerSubscriptionId.size > maxTrackedReqsPerSocket) {
-            const oldestTrackedSubscriptionId = reqPayloadPerSubscriptionId.keys().next().value;
-            if (oldestTrackedSubscriptionId) {
-              reqPayloadPerSubscriptionId.delete(oldestTrackedSubscriptionId);
-            }
-          }
+          trackReq(subscriptionId, event[2]);
 
           if (event[2].limit && event[2].limit > 500) {
             event[2].limit = 500;
             isMessageEdited = true;
-            reqPayloadPerSubscriptionId.set(socketAndSubscriptionId, event[2]);
+            trackReq(subscriptionId, event[2]);
           }
         } else if (event[0] === "CLOSE") {
           const subscriptionId = event[1];
-          const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
-          reqStartedAtPerSubscriptionId.delete(socketAndSubscriptionId);
-          reqPayloadPerSubscriptionId.delete(socketAndSubscriptionId);
-          subscriptionIdAndIPAddress.set(
-            socketAndSubscriptionId,
-            ip + " CLOSED",
-          );
-          subscriptionIdAndPortNumber.set(socketAndSubscriptionId, -port);
+          const socketAndSubscriptionId = forgetSubscription(subscriptionId);
+          subscriptionState.ipAddresses.set(socketAndSubscriptionId, ip + " CLOSED");
+          subscriptionState.portNumbers.set(socketAndSubscriptionId, -port);
           // REQイベントの内容をコンソールにログ出力
           console.log(
             JSON.stringify(
@@ -693,7 +719,7 @@ function listen(): void {
                 connectionCountForIP,
                 subscriptionId,
                 req: event[2],
-                subscriptionSize: transferredSizePerSubscriptionId.get(
+                subscriptionSize: subscriptionState.transferredSizes.get(
                   socketAndSubscriptionId,
                 ),
               }),
@@ -989,27 +1015,9 @@ function listen(): void {
 
           let shouldRelay = true;
           let because = "";
-          if (event[0] === "EVENT" && event[2].kind === 1) {
-            // 正規表現パターンとのマッチ判定
-            for (const filter of contentFilters) {
-              if (filter.test(event[2].content)) {
-                shouldRelay = false;
-                because = "Blocked event by content filter";
-                break;
-              }
-            }
-            // ブロックする公開鍵のリストとのマッチ判定
-            for (const block of blockedPubkeys) {
-              if (event[2].pubkey === block) {
-                shouldRelay = false;
-                because = "Blocked event by pubkey";
-                break;
-              }
-            }
-          } else if (event[0] === "INVALID") {
-            shouldRelay = false;
-            because = event[1];
-          }
+          const relayDecision = evaluateUpstreamEvent(event);
+          shouldRelay = relayDecision.shouldRelay;
+          because = relayDecision.because;
 
           let result: any[];
           try {
@@ -1047,16 +1055,16 @@ function listen(): void {
           } else if (resultType === "EOSE") {
             const subscriptionId = result[1];
             const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
-            const reqStartedAt = reqStartedAtPerSubscriptionId.get(
+            const reqStartedAt = subscriptionState.reqStartedAt.get(
               socketAndSubscriptionId,
             );
             const processingCostMs =
               typeof reqStartedAt === "number" ? Date.now() - reqStartedAt : undefined;
             if (typeof processingCostMs === "number") {
-              const reqPayload = reqPayloadPerSubscriptionId.get(
+              const reqPayload = subscriptionState.reqPayloads.get(
                 socketAndSubscriptionId,
               );
-              reqStartedAtPerSubscriptionId.delete(socketAndSubscriptionId);
+              subscriptionState.reqStartedAt.delete(socketAndSubscriptionId);
               const {
                 totalProcessingCostMsForIP,
                 isNewlyBlocked,
@@ -1083,14 +1091,7 @@ function listen(): void {
                 if (typeof blockedUntil === "number") {
                   await scheduleProcessingCostUnblock(ip, blockedUntil);
                 }
-                const trackedReqsForIP = Array.from(reqPayloadPerSubscriptionId.entries())
-                  .filter(([trackedSocketAndSubscriptionId]) =>
-                    trackedSocketAndSubscriptionId.startsWith(`${socketId}:`)
-                  )
-                  .map(([trackedSocketAndSubscriptionId, trackedReq]) => ({
-                    subscriptionId: trackedSocketAndSubscriptionId.slice(socketId.length + 1),
-                    req: trackedReq,
-                  }));
+                const trackedReqsForIP = getTrackedReqsForSocket();
                 console.warn(
                   JSON.stringify(
                     withTiming({
@@ -1120,7 +1121,7 @@ function listen(): void {
                   socket.close(1008, "Forbidden");
                 }
               }
-              reqPayloadPerSubscriptionId.delete(socketAndSubscriptionId);
+              subscriptionState.reqPayloads.delete(socketAndSubscriptionId);
             } else {
               console.info(
                 JSON.stringify(
@@ -1143,10 +1144,10 @@ function listen(): void {
             const socketAndSubscriptionId = `${socketId}:${subscriptionId}`;
             let subscriptionSize;
             await subscriptionSizeMutex.runExclusive(async () => {
-              subscriptionSize = (transferredSizePerSubscriptionId.get(
+              subscriptionSize = (subscriptionState.transferredSizes.get(
                 socketAndSubscriptionId,
               ) ?? 0) + message.length;
-              transferredSizePerSubscriptionId.set(
+              subscriptionState.transferredSizes.set(
                 socketAndSubscriptionId,
                 subscriptionSize,
               );
