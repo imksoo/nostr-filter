@@ -5,11 +5,11 @@ import url from "url";
 import * as mime from "mime-types";
 import { v7 as uuidv7 } from "uuid";
 import WebSocket from "ws";
-import { blockedActionBanDurationSec, blockedReqKinds, cidrRanges, enableForwardReqHeaders, listenPort, logStartupConfig, maxConcurrentReqsPerSocket, maxTrackedReqsPerSocket, maxWebsocketPayloadSize, processingCostBlockDurationSec, processingCostBlockThresholdMs, singleReqProcessingCostWarnThresholdMs, upstreamHttpUrl, upstreamWsForFastBotUrl, upstreamWsUrl } from "./config";
+import { blockedActionBanDurationSec, blockedReqKinds, cidrRanges, concurrentReqBanDurationSec, concurrentReqBanThreshold, enableForwardReqHeaders, listenPort, logStartupConfig, maxConcurrentReqsPerSocket, maxTrackedReqsPerSocket, maxWebsocketPayloadSize, processingCostBlockDurationSec, processingCostBlockThresholdMs, singleReqProcessingCostWarnThresholdMs, upstreamHttpUrl, upstreamWsForFastBotUrl, upstreamWsUrl } from "./config";
 import { evaluateDownstreamEvent, evaluateUpstreamEvent, ipMatchesCidr } from "./filters";
 import { log } from "./logger";
 import { buildForwardHeaders, clearIdleTimeout, getClientAddress, resetIdleTimeout, setIdleTimeout } from "./network";
-import { acceptConnection, addProcessingCostForIP, blockIPByRule, getConnectionAttemptState, getConnectionCount, getSocketsForIP, releaseConnection, scheduleProcessingCostUnblock, scheduleRuleUnblock, unblockIPByProcessingCost, unblockIPByRule } from "./processing-state";
+import { acceptConnection, addProcessingCostForIP, blockIPByRule, getConnectionAttemptState, getConnectionCount, getSocketsForIP, recordConcurrentReqViolation, releaseConnection, scheduleProcessingCostUnblock, scheduleRuleUnblock, unblockIPByProcessingCost, unblockIPByRule } from "./processing-state";
 import { createSubscriptionTracker } from "./subscriptions";
 
 let upstreamWriteSocket = new WebSocket(upstreamWsForFastBotUrl);
@@ -316,8 +316,15 @@ function listen(): void {
           if (!beginSocketTermination()) return;
           shouldRelay = false;
           because = "Blocked by too many concurrent REQs";
+          const concurrentReqViolationCount = await recordConcurrentReqViolation(ip);
           const blockedMessage = JSON.stringify(["NOTICE", `blocked: ${because}`]);
-          log("WARN", withTiming({ msg: "REQ BLOCKED", because, ip, port, socketId, connectionCountForIP, subscriptionId, activeSubscriptionCount, maxConcurrentReqsPerSocket, req: reqFilter, blockedMessage }));
+          log("WARN", withTiming({ msg: "REQ BLOCKED", because, ip, port, socketId, connectionCountForIP, subscriptionId, activeSubscriptionCount, maxConcurrentReqsPerSocket, concurrentReqViolationCount, concurrentReqBanThreshold, req: reqFilter, blockedMessage }));
+          if (concurrentReqViolationCount >= concurrentReqBanThreshold) {
+            const ruleBlockReason = `Blocked by repeated too many concurrent REQs (${concurrentReqViolationCount}/${concurrentReqBanThreshold})`;
+            const { blockedUntil, isNewlyBlocked } = await blockIPByRule(ip, ruleBlockReason, concurrentReqBanDurationSec);
+            await scheduleRuleUnblock(ip, blockedUntil, handleRuleUnblock);
+            if (isNewlyBlocked) log("WARN", withTiming({ msg: "IP RULE BLOCKED", because: ruleBlockReason, ip, port, socketId, concurrentReqViolationCount, concurrentReqBanThreshold, concurrentReqBanDurationSec, ruleBlockedUntil: new Date(blockedUntil).toISOString(), subscriptionId, activeSubscriptionCount, maxConcurrentReqsPerSocket, req: reqFilter }));
+          }
           downstreamSocket.send(blockedMessage);
           downstreamSocket.close(1008, "Too many concurrent REQs");
           upstreamSocket.close();

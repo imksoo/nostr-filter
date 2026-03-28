@@ -34,6 +34,8 @@ export const singleReqProcessingCostWarnThresholdMs = parseInt(process.env.SINGL
 export const maxTrackedReqsPerSocket = parseInt(process.env.MAX_TRACKED_REQS_PER_SOCKET ?? "100");
 export const maxConcurrentReqsPerSocket = parseInt(process.env.MAX_CONCURRENT_REQS_PER_SOCKET ?? "8");
 export const blockedActionBanDurationSec = parseInt(process.env.BLOCKED_ACTION_BAN_DURATION_SEC ?? "600");
+export const concurrentReqBanThreshold = parseInt(process.env.CONCURRENT_REQ_BAN_THRESHOLD ?? "3");
+export const concurrentReqBanDurationSec = parseInt(process.env.CONCURRENT_REQ_BAN_DURATION_SEC ?? "60");
 
 export function logStartupConfig(): void {
   log("INFO", { msg: "process.env", ...process.env });
@@ -52,5 +54,7 @@ export function logStartupConfig(): void {
     maxTrackedReqsPerSocket,
     maxConcurrentReqsPerSocket,
     blockedActionBanDurationSec,
+    concurrentReqBanThreshold,
+    concurrentReqBanDurationSec,
   });
 }

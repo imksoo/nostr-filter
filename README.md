@@ -97,9 +97,11 @@ Processing-cost settings:
 PROCESSING_COST_BLOCK_THRESHOLD_MS=60000
 PROCESSING_COST_BLOCK_DURATION_SEC=600
 BLOCKED_ACTION_BAN_DURATION_SEC=600
+CONCURRENT_REQ_BAN_THRESHOLD=3
+CONCURRENT_REQ_BAN_DURATION_SEC=60
 SINGLE_REQ_PROCESSING_COST_WARN_THRESHOLD_MS=10000
 MAX_TRACKED_REQS_PER_SOCKET=100
-MAX_CONCURRENT_REQS_PER_SOCKET=8
+MAX_CONCURRENT_REQS_PER_SOCKET=16
 ```
 
 ### Environment variables
@@ -136,6 +138,10 @@ MAX_CONCURRENT_REQS_PER_SOCKET=8
   How long an IP remains blocked after crossing the cumulative threshold.
 - `BLOCKED_ACTION_BAN_DURATION_SEC`
   How long an IP remains blocked after it triggers a blocked `REQ` or blocked `EVENT` kind.
+- `CONCURRENT_REQ_BAN_THRESHOLD`
+  Number of `Blocked by too many concurrent REQs` violations from one IP before it is temporarily blocked.
+- `CONCURRENT_REQ_BAN_DURATION_SEC`
+  How long an IP remains blocked after repeatedly hitting the concurrent-`REQ` limit.
 - `SINGLE_REQ_PROCESSING_COST_WARN_THRESHOLD_MS`
   Per-request warning threshold in milliseconds. `0` disables heavy single-request warnings.
 - `MAX_TRACKED_REQS_PER_SOCKET`
@@ -179,6 +185,7 @@ This is useful when a client never crosses the cumulative block threshold but st
 - Existing subscription IDs may be replaced by another `REQ` with the same ID.
 - New subscription IDs above `MAX_CONCURRENT_REQS_PER_SOCKET` are rejected immediately.
 - The filter emits `REQ BLOCKED` and closes the socket with a policy error before `strfry` can emit `too many concurrent REQs`.
+- If the same IP hits this limit `CONCURRENT_REQ_BAN_THRESHOLD` times, the IP is temporarily blocked for `CONCURRENT_REQ_BAN_DURATION_SEC` and the filter emits `IP RULE BLOCKED`.
 
 ### Blocked `REQ` kinds
 
