@@ -8,7 +8,7 @@ import WebSocket from "ws";
 import { blockedActionBanDurationSec, blockedReqKinds, cidrRanges, concurrentReqBanDurationSec, concurrentReqBanThreshold, enableForwardReqHeaders, listenPort, logStartupConfig, maxConcurrentReqsPerSocket, maxTrackedReqsPerSocket, maxWebsocketPayloadSize, processingCostBlockDurationSec, processingCostBlockThresholdMs, singleReqProcessingCostWarnThresholdMs, upstreamHttpUrl, upstreamWsForFastBotUrl, upstreamWsUrl } from "./config";
 import { evaluateDownstreamEvent, evaluateUpstreamEvent, ipMatchesCidr } from "./filters";
 import { log } from "./logger";
-import { buildForwardHeaders, clearIdleTimeout, getClientAddress, resetIdleTimeout, setIdleTimeout } from "./network";
+import { buildForwardHeaders, clearIdleTimeout, getClientAddress, getRequestedSubprotocols, resetIdleTimeout, setIdleTimeout } from "./network";
 import { acceptConnection, addProcessingCostForIP, blockIPByRule, getConnectionAttemptState, getConnectionCount, getSocketsForIP, recordConcurrentReqViolation, releaseConnection, scheduleProcessingCostUnblock, scheduleRuleUnblock, unblockIPByProcessingCost, unblockIPByRule } from "./processing-state";
 import { createSubscriptionTracker } from "./subscriptions";
 
@@ -91,13 +91,24 @@ function listen(): void {
 
     const clientAddress = getClientAddress(req);
     const { ip, port } = clientAddress;
+    const requestedSubprotocols = getRequestedSubprotocols(req);
     const wsClientOptions = enableForwardReqHeaders ? { headers: buildForwardHeaders(req, clientAddress) } : undefined;
-    const upstreamSocket = new WebSocket(upstreamWsUrl, wsClientOptions);
+    const upstreamSocket = requestedSubprotocols ? new WebSocket(upstreamWsUrl, requestedSubprotocols, wsClientOptions) : new WebSocket(upstreamWsUrl, wsClientOptions);
 
     function beginSocketTermination(): boolean {
       if (isSocketTerminating) return false;
       isSocketTerminating = true;
       return true;
+    }
+
+    function closeUpstreamSocket(): void {
+      if (upstreamSocket.readyState === WebSocket.CONNECTING) {
+        upstreamSocket.terminate();
+        return;
+      }
+      if (upstreamSocket.readyState === WebSocket.OPEN) {
+        upstreamSocket.close();
+      }
     }
 
     function sendBlockedNoticeAndClose(because: string, closeCode: number, closeReason: string, extraPayload: Record<string, unknown> = {}, logUntil?: number): void {
@@ -109,7 +120,7 @@ function listen(): void {
       }
       const blockedMessage = JSON.stringify(["NOTICE", `blocked: ${because}`]);
       log("DEBUG", withTiming({ msg: "BLOCKED NOTICE", ip, port, socketId, because, blockedMessage, ...extraPayload }));
-      upstreamSocket.close();
+      closeUpstreamSocket();
       downstreamSocket.send(blockedMessage);
       downstreamSocket.close(closeCode, closeReason);
     }
@@ -127,9 +138,10 @@ function listen(): void {
       });
 
       upstreamSocket.on("error", async (error: Error) => {
+        if (isSocketTerminating && error.message === "WebSocket was closed before the connection was established") return;
         log("WARN", withTiming({ msg: "UPSTREAM ERROR", socketId, error }));
         downstreamSocket.close();
-        upstreamSocket.close();
+        closeUpstreamSocket();
       });
 
       upstreamSocket.on("message", async (data) => {
