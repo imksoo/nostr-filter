@@ -5,11 +5,11 @@ import url from "url";
 import * as mime from "mime-types";
 import { v7 as uuidv7 } from "uuid";
 import WebSocket from "ws";
-import { blockedActionBanDurationSec, cidrRanges, concurrentReqBanDurationSec, concurrentReqBanThreshold, enableForwardReqHeaders, listenPort, logStartupConfig, maxConcurrentReqsPerSocket, maxTrackedReqsPerSocket, maxWebsocketPayloadSize, processingCostBlockDurationSec, processingCostBlockThresholdMs, singleReqProcessingCostWarnThresholdMs, upstreamHttpUrl, upstreamWsForFastBotUrl, upstreamWsUrl } from "./config";
+import { blockedActionBanDurationSec, cidrRanges, concurrentReqBanDurationSec, concurrentReqBanThreshold, enableForwardReqHeaders, listenPort, logStartupConfig, maxConcurrentReqsPerSocket, maxTrackedReqsPerSocket, maxWebsocketPayloadSize, processingCostBlockDurationSec, processingCostBlockThresholdMs, reconnectBanDurationSec, reconnectBanThreshold, reconnectBanWindowSec, singleReqProcessingCostWarnThresholdMs, upstreamHttpUrl, upstreamWsForFastBotUrl, upstreamWsUrl } from "./config";
 import { evaluateDownstreamEvent, evaluateUpstreamEvent, ipMatchesCidr } from "./filters";
 import { log } from "./logger";
 import { buildForwardHeaders, clearIdleTimeout, getClientAddress, getRequestedSubprotocols, resetIdleTimeout, setIdleTimeout } from "./network";
-import { acceptConnection, addProcessingCostForIP, blockIPByRule, getConnectionAttemptState, getConnectionCount, getSocketsForIP, recordConcurrentReqViolation, releaseConnection, scheduleProcessingCostUnblock, scheduleRuleUnblock, unblockIPByProcessingCost, unblockIPByRule } from "./processing-state";
+import { acceptConnection, addProcessingCostForIP, blockIPByRule, getConnectionAttemptState, getConnectionCount, getSocketsForIP, recordConcurrentReqViolation, recordReconnectAttempt, releaseConnection, scheduleProcessingCostUnblock, scheduleRuleUnblock, unblockIPByProcessingCost, unblockIPByRule } from "./processing-state";
 import { createSubscriptionTracker, SubscriptionTracker } from "./subscriptions";
 
 let upstreamWriteSocket = new WebSocket(upstreamWsForFastBotUrl);
@@ -278,6 +278,24 @@ function listen(): void {
     }
 
     const connectionCountForIP = await acceptConnection(ip, downstreamSocket);
+    const reconnectAttemptCount = await recordReconnectAttempt(ip);
+    if (reconnectBanThreshold > 0 && reconnectAttemptCount >= reconnectBanThreshold) {
+      const because = `Blocked by repeated reconnects (${reconnectAttemptCount}/${reconnectBanThreshold} in ${reconnectBanWindowSec}s)`;
+      const { blockedUntil, isNewlyBlocked } = await blockIPByRule(ip, because, reconnectBanDurationSec);
+      await scheduleRuleUnblock(ip, blockedUntil, handleRuleUnblock);
+      if (isNewlyBlocked) {
+        log("WARN", withTiming({ msg: "IP RULE BLOCKED", because, ip, port, socketId, reconnectAttemptCount, reconnectBanThreshold, reconnectBanWindowSec, reconnectBanDurationSec, ruleBlockedUntil: new Date(blockedUntil).toISOString() }));
+        const blockedMessage = JSON.stringify(["NOTICE", `blocked: ${because}`]);
+        const sockets = await getSocketsForIP(ip);
+        for (const socket of sockets) {
+          if (socket === downstreamSocket) continue;
+          socket.send(blockedMessage);
+          socket.close(1008, "Forbidden");
+        }
+      }
+      sendBlockedNoticeAndClose(because, 1008, "Forbidden", { connectionCountForIP, reconnectAttemptCount, reconnectBanThreshold, reconnectBanWindowSec, reconnectBanDurationSec }, blockedUntil);
+      return;
+    }
     log("INFO", withTiming({ msg: "CONNECTED", ip, port, socketId, connectionCountForIP, headers: req.headers }));
 
     async function handleDownstreamMessage(data: WebSocket.RawData): Promise<void> {

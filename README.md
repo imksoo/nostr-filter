@@ -101,6 +101,9 @@ PROCESSING_COST_BLOCK_DURATION_SEC=600
 BLOCKED_ACTION_BAN_DURATION_SEC=600
 CONCURRENT_REQ_BAN_THRESHOLD=3
 CONCURRENT_REQ_BAN_DURATION_SEC=60
+RECONNECT_BAN_THRESHOLD=20
+RECONNECT_BAN_WINDOW_SEC=60
+RECONNECT_BAN_DURATION_SEC=300
 SINGLE_REQ_PROCESSING_COST_WARN_THRESHOLD_MS=10000
 MAX_TRACKED_REQS_PER_SOCKET=100
 MAX_CONCURRENT_REQS_PER_SOCKET=16
@@ -148,6 +151,12 @@ MAX_CONCURRENT_REQS_PER_SOCKET=16
   Number of `Blocked by too many concurrent REQs` violations from one IP before it is temporarily blocked.
 - `CONCURRENT_REQ_BAN_DURATION_SEC`
   How long an IP remains blocked after repeatedly hitting the concurrent-`REQ` limit.
+- `RECONNECT_BAN_THRESHOLD`
+  Number of accepted websocket connections from one IP inside the reconnect window before `nostr-filter` temporarily blocks that IP.
+- `RECONNECT_BAN_WINDOW_SEC`
+  Sliding time window, in seconds, used for reconnect-rate tracking.
+- `RECONNECT_BAN_DURATION_SEC`
+  How long an IP remains blocked after repeatedly reconnecting inside the reconnect window.
 - `SINGLE_REQ_PROCESSING_COST_WARN_THRESHOLD_MS`
   Per-request warning threshold in milliseconds. `0` disables heavy single-request warnings.
 - `MAX_TRACKED_REQS_PER_SOCKET`
@@ -192,6 +201,12 @@ This is useful when a client never crosses the cumulative block threshold but st
 - New subscription IDs above `MAX_CONCURRENT_REQS_PER_SOCKET` are rejected immediately.
 - The filter emits `REQ BLOCKED` and closes the socket with a policy error before `strfry` can emit `too many concurrent REQs`.
 - If the same IP hits this limit `CONCURRENT_REQ_BAN_THRESHOLD` times, the IP is temporarily blocked for `CONCURRENT_REQ_BAN_DURATION_SEC` and the filter emits `IP RULE BLOCKED`.
+
+### Reconnect-rate blocking
+
+- Every accepted websocket connection increments a short-lived reconnect counter for that IP.
+- If the same IP opens `RECONNECT_BAN_THRESHOLD` connections inside `RECONNECT_BAN_WINDOW_SEC`, `nostr-filter` emits `IP RULE BLOCKED` and blocks that IP for `RECONNECT_BAN_DURATION_SEC`.
+- This is intended to catch mechanical reconnect loops while allowing more headroom in `nginx`.
 
 ### Blocked kinds
 

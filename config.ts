@@ -38,6 +38,9 @@ export const maxConcurrentReqsPerSocket = parseInt(process.env.MAX_CONCURRENT_RE
 export const blockedActionBanDurationSec = parseInt(process.env.BLOCKED_ACTION_BAN_DURATION_SEC ?? "600");
 export const concurrentReqBanThreshold = parseInt(process.env.CONCURRENT_REQ_BAN_THRESHOLD ?? "3");
 export const concurrentReqBanDurationSec = parseInt(process.env.CONCURRENT_REQ_BAN_DURATION_SEC ?? "60");
+export const reconnectBanThreshold = parseInt(process.env.RECONNECT_BAN_THRESHOLD ?? "20");
+export const reconnectBanWindowSec = parseInt(process.env.RECONNECT_BAN_WINDOW_SEC ?? "60");
+export const reconnectBanDurationSec = parseInt(process.env.RECONNECT_BAN_DURATION_SEC ?? "300");
 
 export function logStartupConfig(): void {
   log("INFO", { msg: "process.env", ...process.env });
@@ -60,5 +63,8 @@ export function logStartupConfig(): void {
     blockedActionBanDurationSec,
     concurrentReqBanThreshold,
     concurrentReqBanDurationSec,
+    reconnectBanThreshold,
+    reconnectBanWindowSec,
+    reconnectBanDurationSec,
   });
 }
