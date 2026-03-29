@@ -37,6 +37,10 @@ export function createSubscriptionTracker(socketId: string, maxTrackedReqsPerSoc
     return activeSubscriptions.size;
   }
 
+  function getSocketId(): string {
+    return socketId;
+  }
+
   function hasActiveSubscription(subscriptionId: string): boolean {
     return activeSubscriptions.has(getSocketSubscriptionId(subscriptionId));
   }
@@ -78,6 +82,7 @@ export function createSubscriptionTracker(socketId: string, maxTrackedReqsPerSoc
   return {
     trackReq,
     forgetSubscription,
+    getSocketId,
     getActiveSubscriptionCount,
     hasActiveSubscription,
     getReqStartedAt,

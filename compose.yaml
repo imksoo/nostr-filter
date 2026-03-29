@@ -21,8 +21,8 @@ services:
     logging:
       driver: json-file
       options:
-        max-file: 4
-        max-size: 16m
+        max-file: 8
+        max-size: 256m
     #logging:
     #  driver: journald
     #  options:

@@ -5,15 +5,37 @@ import url from "url";
 import * as mime from "mime-types";
 import { v7 as uuidv7 } from "uuid";
 import WebSocket from "ws";
-import { blockedActionBanDurationSec, blockedReqKinds, cidrRanges, concurrentReqBanDurationSec, concurrentReqBanThreshold, enableForwardReqHeaders, listenPort, logStartupConfig, maxConcurrentReqsPerSocket, maxTrackedReqsPerSocket, maxWebsocketPayloadSize, processingCostBlockDurationSec, processingCostBlockThresholdMs, singleReqProcessingCostWarnThresholdMs, upstreamHttpUrl, upstreamWsForFastBotUrl, upstreamWsUrl } from "./config";
+import { blockedActionBanDurationSec, cidrRanges, concurrentReqBanDurationSec, concurrentReqBanThreshold, enableForwardReqHeaders, listenPort, logStartupConfig, maxConcurrentReqsPerSocket, maxTrackedReqsPerSocket, maxWebsocketPayloadSize, processingCostBlockDurationSec, processingCostBlockThresholdMs, singleReqProcessingCostWarnThresholdMs, upstreamHttpUrl, upstreamWsForFastBotUrl, upstreamWsUrl } from "./config";
 import { evaluateDownstreamEvent, evaluateUpstreamEvent, ipMatchesCidr } from "./filters";
 import { log } from "./logger";
 import { buildForwardHeaders, clearIdleTimeout, getClientAddress, getRequestedSubprotocols, resetIdleTimeout, setIdleTimeout } from "./network";
 import { acceptConnection, addProcessingCostForIP, blockIPByRule, getConnectionAttemptState, getConnectionCount, getSocketsForIP, recordConcurrentReqViolation, releaseConnection, scheduleProcessingCostUnblock, scheduleRuleUnblock, unblockIPByProcessingCost, unblockIPByRule } from "./processing-state";
-import { createSubscriptionTracker } from "./subscriptions";
+import { createSubscriptionTracker, SubscriptionTracker } from "./subscriptions";
 
 let upstreamWriteSocket = new WebSocket(upstreamWsForFastBotUrl);
 const blockedConnectLogUntilByIP = new Map<string, number>();
+const subscriptionTrackersByIP = new Map<string, Map<string, SubscriptionTracker>>();
+
+function registerSubscriptionTracker(ip: string, subscriptionTracker: SubscriptionTracker): void {
+  const trackersForIP = subscriptionTrackersByIP.get(ip) ?? new Map<string, SubscriptionTracker>();
+  trackersForIP.set(subscriptionTracker.getSocketId(), subscriptionTracker);
+  subscriptionTrackersByIP.set(ip, trackersForIP);
+}
+
+function unregisterSubscriptionTracker(ip: string, socketId: string): void {
+  const trackersForIP = subscriptionTrackersByIP.get(ip);
+  if (!trackersForIP) return;
+  trackersForIP.delete(socketId);
+  if (trackersForIP.size === 0) subscriptionTrackersByIP.delete(ip);
+}
+
+function getActiveSubscriptionCountForIP(ip: string): number {
+  const trackersForIP = subscriptionTrackersByIP.get(ip);
+  if (!trackersForIP) return 0;
+  let activeSubscriptionCountForIP = 0;
+  for (const subscriptionTracker of trackersForIP.values()) activeSubscriptionCountForIP += subscriptionTracker.getActiveSubscriptionCount();
+  return activeSubscriptionCountForIP;
+}
 
 logStartupConfig();
 
@@ -91,6 +113,7 @@ function listen(): void {
 
     const clientAddress = getClientAddress(req);
     const { ip, port } = clientAddress;
+    registerSubscriptionTracker(ip, subscriptionTracker);
     const requestedSubprotocols = getRequestedSubprotocols(req);
     const wsClientOptions = enableForwardReqHeaders ? { headers: buildForwardHeaders(req, clientAddress) } : undefined;
     const upstreamSocket = requestedSubprotocols ? new WebSocket(upstreamWsUrl, requestedSubprotocols, wsClientOptions) : new WebSocket(upstreamWsUrl, wsClientOptions);
@@ -182,7 +205,7 @@ function listen(): void {
             subscriptionTracker.deleteReqTracking(subscriptionId);
             const { totalProcessingCostMsForIP, isNewlyBlocked, blockedUntil } = await addProcessingCostForIP(ip, processingCostMs);
 
-            log("INFO", withTiming({ msg: "EOSE", ip, port, resultType, socketId, subscriptionId, processingCostMs, totalProcessingCostMsForIP, ...(typeof blockedUntil === "number" ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() } : {}) }));
+            log("INFO", withTiming({ msg: "EOSE", ip, port, resultType, socketId, subscriptionId, processingCostMs, totalProcessingCostMsForIP, activeSubscriptionCountForSocket: subscriptionTracker.getActiveSubscriptionCount(), activeSubscriptionCountForIP: getActiveSubscriptionCountForIP(ip), ...(typeof blockedUntil === "number" ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() } : {}) }));
 
             if (singleReqProcessingCostWarnThresholdMs > 0 && processingCostMs >= singleReqProcessingCostWarnThresholdMs) {
               log("WARN", withTiming({ msg: "HEAVY SINGLE REQ", ip, port, socketId, subscriptionId, processingCostMs, singleReqProcessingCostWarnThresholdMs, totalProcessingCostMsForIP, req: reqPayload, trackedReqsForSocket: subscriptionTracker.getTrackedReqsForSocket() }));
@@ -201,7 +224,7 @@ function listen(): void {
               }
             }
           } else {
-            log("INFO", withTiming({ msg: "EOSE", ip, port, resultType, socketId, subscriptionId }));
+            log("INFO", withTiming({ msg: "EOSE", ip, port, resultType, socketId, subscriptionId, activeSubscriptionCountForSocket: subscriptionTracker.getActiveSubscriptionCount(), activeSubscriptionCountForIP: getActiveSubscriptionCountForIP(ip) }));
           }
         } else if (resultType === "INVALID") {
           shouldRelay = false;
@@ -304,24 +327,6 @@ function listen(): void {
       } else if (event[0] === "REQ") {
         const subscriptionId = event[1];
         const reqFilter = event[2];
-        const reqKinds = Array.isArray(reqFilter?.kinds) ? reqFilter.kinds.filter((kind: unknown): kind is number => typeof kind === "number") : [];
-        const blockedReqKind = reqKinds.find((kind: number) => blockedReqKinds.includes(kind));
-        if (typeof blockedReqKind === "number") {
-          if (!beginSocketTermination()) return;
-          shouldRelay = false;
-          because = `Blocked by blocked REQ kind: ${blockedReqKind}`;
-          const { blockedUntil, isNewlyBlocked } = await blockIPByRule(ip, because);
-          await scheduleRuleUnblock(ip, blockedUntil, handleRuleUnblock);
-          const blockedMessage = JSON.stringify(["NOTICE", `blocked: ${because}`]);
-          log("WARN", withTiming({ msg: "REQ BLOCKED", because, ip, port, socketId, connectionCountForIP, subscriptionId, blockedReqKind, blockedReqKinds, req: reqFilter, blockedMessage }));
-          if (isNewlyBlocked) {
-            log("WARN", withTiming({ msg: "IP RULE BLOCKED", because, ip, port, socketId, blockedActionBanDurationSec, ruleBlockedUntil: new Date(blockedUntil).toISOString(), subscriptionId, blockedReqKind, req: reqFilter }));
-          }
-          downstreamSocket.send(blockedMessage);
-          downstreamSocket.close(1008, "Blocked REQ kind");
-          upstreamSocket.close();
-          return;
-        }
         const isNewSubscription = !subscriptionTracker.hasActiveSubscription(subscriptionId);
         const activeSubscriptionCount = subscriptionTracker.getActiveSubscriptionCount();
         if (isNewSubscription && activeSubscriptionCount >= maxConcurrentReqsPerSocket) {
@@ -435,6 +440,7 @@ function listen(): void {
     });
 
     downstreamSocket.on("close", async () => {
+      unregisterSubscriptionTracker(ip, socketId);
       const releaseState = await releaseConnection(ip, downstreamSocket);
       log("DEBUG", withTiming({ msg: "DISCONNECTED", ip, port, socketId, connectionCountForIP: releaseState.connectionCountForIP }));
       if (releaseState.shouldResetIPState || (releaseState.connectionCountForIP - 1 <= 0 && releaseState.isProcessingCostBlocked)) {
