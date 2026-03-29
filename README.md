@@ -84,7 +84,9 @@ Filtering and blocking settings:
 
 ```ini
 BLOCKED_PUBKEYS=
-BLOCKED_REQ_KINDS=1009,22668,22689,22608,22837,22817,22760,22628,20000,20001,1000
+BLOCKED_REQ_KINDS=
+BLOCK_EPHEMERAL_WRITES=true
+BLOCKED_WRITE_KINDS=1009,22668,22689,22608,22837,22817,22760,22628,20000,20001,1000
 WHITELISTED_PUBKEYS=
 BLOCKED_IP_ADDR_1=43.205.189.224/32
 MUTE_FILTER_1=/spam/i
@@ -125,7 +127,11 @@ MAX_CONCURRENT_REQS_PER_SOCKET=16
 - `BLOCKED_PUBKEYS`
   Comma-separated hex pubkeys that are always blocked.
 - `BLOCKED_REQ_KINDS`
-  Comma-separated event kinds. If a client sends a `REQ` whose `kinds` contains any of these values, or writes an `EVENT` with one of these kinds, `nostr-filter` rejects it before forwarding it upstream.
+  Optional comma-separated event kinds for read-side `REQ` blocking. If empty, `REQ` is not blocked by kind.
+- `BLOCK_EPHEMERAL_WRITES`
+  When `true`, downstream `EVENT` writes with `20000 <= kind < 30000` are ignored before forwarding upstream. This does not trigger an IP ban by itself.
+- `BLOCKED_WRITE_KINDS`
+  Comma-separated event kinds for downstream `EVENT` write blocking.
 - `WHITELISTED_PUBKEYS`
   Comma-separated hex pubkeys that bypass some filtering checks where applicable.
 - `BLOCKED_IP_ADDR_*`
@@ -187,12 +193,13 @@ This is useful when a client never crosses the cumulative block threshold but st
 - The filter emits `REQ BLOCKED` and closes the socket with a policy error before `strfry` can emit `too many concurrent REQs`.
 - If the same IP hits this limit `CONCURRENT_REQ_BAN_THRESHOLD` times, the IP is temporarily blocked for `CONCURRENT_REQ_BAN_DURATION_SEC` and the filter emits `IP RULE BLOCKED`.
 
-### Blocked `REQ` kinds
+### Blocked kinds
 
-If `BLOCKED_REQ_KINDS` is set, `nostr-filter` rejects:
+If `BLOCK_EPHEMERAL_WRITES` is `true`, `nostr-filter` ignores downstream `EVENT` writes whose `kind` is in the ephemeral range `20000 <= kind < 30000`. These are logged as `EVENT BLOCKED`, but they do not trigger an IP ban by themselves.
 
-- any `REQ` whose `kinds` array contains one of those values
-- any downstream `EVENT` write whose `kind` matches one of those values
+If `BLOCKED_WRITE_KINDS` is set, `nostr-filter` rejects any downstream `EVENT` write whose `kind` matches one of those values.
+
+If `BLOCKED_REQ_KINDS` is set, `nostr-filter` can also reject any `REQ` whose `kinds` array contains one of those values.
 
 - The triggering IP is temporarily blocked for `BLOCKED_ACTION_BAN_DURATION_SEC`
 - The filter emits `IP RULE BLOCKED`

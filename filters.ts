@@ -1,5 +1,5 @@
 import * as net from "net";
-import { blockedPubkeys, blockedReqKinds, contentFilters, filterProxyEvents, whitelistedPubkeys } from "./config";
+import { blockEphemeralWrites, blockedPubkeys, blockedWriteKinds, contentFilters, filterProxyEvents, whitelistedPubkeys } from "./config";
 import { RelayDecision } from "./types";
 
 export function ipMatchesCidr(ip: string, cidr: string): boolean {
@@ -42,7 +42,9 @@ function evaluateKind1Event(event: { content: string; pubkey: string; tags: stri
 
 export function evaluateDownstreamEvent(event: any[]): RelayDecision {
   if (event[0] !== "EVENT") return { shouldRelay: true, because: "" };
-  if (blockedReqKinds.includes(event[1].kind)) return { shouldRelay: false, because: `Blocked event by blocked kind: ${event[1].kind}` };
+  // Explicit blocked kinds take precedence; other ephemeral writes are dropped without escalating to an IP ban.
+  if (blockedWriteKinds.includes(event[1].kind)) return { shouldRelay: false, because: `Blocked event by blocked kind: ${event[1].kind}` };
+  if (blockEphemeralWrites && event[1].kind >= 20000 && event[1].kind < 30000) return { shouldRelay: false, because: `Blocked event by ephemeral kind range: ${event[1].kind}` };
 
   let decision: RelayDecision = { shouldRelay: true, because: "" };
   if (event[1].kind === 1) {

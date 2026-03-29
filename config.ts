@@ -21,6 +21,8 @@ export const blockedPubkeys = typeof process.env.BLOCKED_PUBKEYS !== "undefined"
 
 export const whitelistedPubkeys = typeof process.env.WHITELISTED_PUBKEYS !== "undefined" && process.env.WHITELISTED_PUBKEYS !== "" ? process.env.WHITELISTED_PUBKEYS.split(",").map((pubkey) => pubkey.trim()) : [];
 export const blockedReqKinds = typeof process.env.BLOCKED_REQ_KINDS !== "undefined" && process.env.BLOCKED_REQ_KINDS !== "" ? process.env.BLOCKED_REQ_KINDS.split(",").map((kind) => parseInt(kind.trim(), 10)).filter((kind) => !Number.isNaN(kind)) : [];
+export const blockedWriteKinds = typeof process.env.BLOCKED_WRITE_KINDS !== "undefined" && process.env.BLOCKED_WRITE_KINDS !== "" ? process.env.BLOCKED_WRITE_KINDS.split(",").map((kind) => parseInt(kind.trim(), 10)).filter((kind) => !Number.isNaN(kind)) : blockedReqKinds;
+export const blockEphemeralWrites = process.env.BLOCK_EPHEMERAL_WRITES === "true";
 
 export const filterProxyEvents = process.env.FILTER_PROXY_EVENTS === "true";
 export const enableForwardReqHeaders = process.env.ENABLE_FORWARD_REQ_HEADERS === "true";
@@ -47,6 +49,8 @@ export function logStartupConfig(): void {
     upstreamWsForFastBotUrl,
     contentFilters: contentFilters.map((regex) => `/${regex.source}/${regex.flags}`),
     blockedReqKinds,
+    blockedWriteKinds,
+    blockEphemeralWrites,
     blockedIPAddresses: cidrRanges,
     processingCostBlockThresholdMs,
     processingCostBlockDurationSec,
