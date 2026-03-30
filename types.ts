@@ -36,3 +36,20 @@ export type TrackedReq = {
   subscriptionId: string;
   req: unknown;
 };
+
+export type ReqShape = {
+  filterCount: number;
+  kinds: number[];
+  authorsCount: number;
+  pTagCount: number;
+  eTagCount: number;
+  otherTagKeys: string[];
+  limit?: number;
+};
+
+export type ReqExecutionStats = {
+  shape: ReqShape;
+  mode: "passthrough" | "strip_p_e_tags";
+  upstreamEventCount: number;
+  downstreamEventCount: number;
+};

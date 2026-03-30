@@ -20,8 +20,18 @@ export const contentFilters: RegExp[] = Object.keys(process.env)
 export const blockedPubkeys = typeof process.env.BLOCKED_PUBKEYS !== "undefined" && process.env.BLOCKED_PUBKEYS !== "" ? process.env.BLOCKED_PUBKEYS.split(",").map((pubkey) => pubkey.trim()) : [];
 
 export const whitelistedPubkeys = typeof process.env.WHITELISTED_PUBKEYS !== "undefined" && process.env.WHITELISTED_PUBKEYS !== "" ? process.env.WHITELISTED_PUBKEYS.split(",").map((pubkey) => pubkey.trim()) : [];
-export const blockedReqKinds = typeof process.env.BLOCKED_REQ_KINDS !== "undefined" && process.env.BLOCKED_REQ_KINDS !== "" ? process.env.BLOCKED_REQ_KINDS.split(",").map((kind) => parseInt(kind.trim(), 10)).filter((kind) => !Number.isNaN(kind)) : [];
-export const blockedWriteKinds = typeof process.env.BLOCKED_WRITE_KINDS !== "undefined" && process.env.BLOCKED_WRITE_KINDS !== "" ? process.env.BLOCKED_WRITE_KINDS.split(",").map((kind) => parseInt(kind.trim(), 10)).filter((kind) => !Number.isNaN(kind)) : blockedReqKinds;
+export const blockedReqKinds =
+  typeof process.env.BLOCKED_REQ_KINDS !== "undefined" && process.env.BLOCKED_REQ_KINDS !== ""
+    ? process.env.BLOCKED_REQ_KINDS.split(",")
+        .map((kind) => parseInt(kind.trim(), 10))
+        .filter((kind) => !Number.isNaN(kind))
+    : [];
+export const blockedWriteKinds =
+  typeof process.env.BLOCKED_WRITE_KINDS !== "undefined" && process.env.BLOCKED_WRITE_KINDS !== ""
+    ? process.env.BLOCKED_WRITE_KINDS.split(",")
+        .map((kind) => parseInt(kind.trim(), 10))
+        .filter((kind) => !Number.isNaN(kind))
+    : blockedReqKinds;
 export const blockEphemeralWrites = process.env.BLOCK_EPHEMERAL_WRITES === "true";
 
 export const filterProxyEvents = process.env.FILTER_PROXY_EVENTS === "true";
@@ -41,6 +51,20 @@ export const concurrentReqBanDurationSec = parseInt(process.env.CONCURRENT_REQ_B
 export const reconnectBanThreshold = parseInt(process.env.RECONNECT_BAN_THRESHOLD ?? "20");
 export const reconnectBanWindowSec = parseInt(process.env.RECONNECT_BAN_WINDOW_SEC ?? "60");
 export const reconnectBanDurationSec = parseInt(process.env.RECONNECT_BAN_DURATION_SEC ?? "300");
+export const reqRewriteEnabledKinds =
+  typeof process.env.REQ_REWRITE_ENABLED_KINDS !== "undefined" && process.env.REQ_REWRITE_ENABLED_KINDS !== ""
+    ? process.env.REQ_REWRITE_ENABLED_KINDS.split(",")
+        .map((kind) => parseInt(kind.trim(), 10))
+        .filter((kind) => !Number.isNaN(kind))
+    : [1984];
+export const reqRewriteDisabledKinds =
+  typeof process.env.REQ_REWRITE_DISABLED_KINDS !== "undefined" && process.env.REQ_REWRITE_DISABLED_KINDS !== ""
+    ? process.env.REQ_REWRITE_DISABLED_KINDS.split(",")
+        .map((kind) => parseInt(kind.trim(), 10))
+        .filter((kind) => !Number.isNaN(kind))
+    : [1];
+export const reqPlannerStatsPath = process.env.REQ_PLANNER_STATS_PATH ?? "./data/req-planner-stats.json";
+export const reqPlannerStatsFlushIntervalSec = parseInt(process.env.REQ_PLANNER_STATS_FLUSH_INTERVAL_SEC ?? "60");
 
 export function logStartupConfig(): void {
   log("INFO", { msg: "process.env", ...process.env });
@@ -66,5 +90,9 @@ export function logStartupConfig(): void {
     reconnectBanThreshold,
     reconnectBanWindowSec,
     reconnectBanDurationSec,
+    reqRewriteEnabledKinds,
+    reqRewriteDisabledKinds,
+    reqPlannerStatsPath,
+    reqPlannerStatsFlushIntervalSec,
   });
 }

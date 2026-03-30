@@ -107,6 +107,10 @@ RECONNECT_BAN_DURATION_SEC=300
 SINGLE_REQ_PROCESSING_COST_WARN_THRESHOLD_MS=10000
 MAX_TRACKED_REQS_PER_SOCKET=100
 MAX_CONCURRENT_REQS_PER_SOCKET=16
+REQ_REWRITE_ENABLED_KINDS=1984
+REQ_REWRITE_DISABLED_KINDS=1
+REQ_PLANNER_STATS_PATH=./data/req-planner-stats.json
+REQ_PLANNER_STATS_FLUSH_INTERVAL_SEC=60
 ```
 
 ### Environment variables
@@ -163,6 +167,14 @@ MAX_CONCURRENT_REQS_PER_SOCKET=16
   Maximum number of tracked request payloads kept in memory for one socket.
 - `MAX_CONCURRENT_REQS_PER_SOCKET`
   Maximum number of active subscriptions allowed on one client WebSocket. A new `REQ` above this limit is rejected by `nostr-filter` before it reaches `strfry`.
+- `REQ_REWRITE_ENABLED_KINDS`
+  Comma-separated kinds eligible for local `REQ` rewrite. The current rewrite strips `#p` and `#e` from single-filter, single-kind requests before forwarding upstream, then applies those tag checks locally.
+- `REQ_REWRITE_DISABLED_KINDS`
+  Comma-separated kinds that must never be rewritten. This is useful for keeping common cases such as `kind 1` in pass-through mode.
+- `REQ_PLANNER_STATS_PATH`
+  File used to persist REQ-shape planning statistics across restarts.
+- `REQ_PLANNER_STATS_FLUSH_INTERVAL_SEC`
+  How often in seconds the in-memory REQ-shape planning statistics are flushed to disk.
 
 ## Request-cost tracking
 
@@ -179,6 +191,49 @@ This gives you two separate signals:
   Useful for identifying one expensive query.
 - Cumulative per-IP cost
   Useful for identifying abusive or persistent expensive usage patterns.
+
+### REQ-shape planner stats
+
+`nostr-filter` also keeps rolling per-shape statistics intended to support future query rewriting decisions.
+
+For each completed subscription it records:
+
+- `kinds`
+- `authorsCount`
+- `pTagCount`
+- `eTagCount`
+- `otherTagKeys`
+- `limit`
+- `upstreamEventCount`
+- `downstreamEventCount`
+- `processingCostMs`
+
+These statistics are:
+
+- kept in memory while the process runs
+- flushed every `REQ_PLANNER_STATS_FLUSH_INTERVAL_SEC`
+- restored from `REQ_PLANNER_STATS_PATH` at startup
+
+The filter emits `REQ SHAPE STATS` summaries as samples accumulate. This is meant to answer questions such as whether `kind 1984` with multiple `#p` tags should eventually be rewritten before reaching `strfry`.
+
+### Kind-based REQ rewrite
+
+Before forwarding a `REQ` upstream, `nostr-filter` can rewrite some single-kind requests.
+
+Current behavior:
+
+- rewrite is considered only when the message contains exactly one filter object
+- rewrite is considered only when that filter has exactly one `kind`
+- kinds listed in `REQ_REWRITE_DISABLED_KINDS` are always passed through unchanged
+- kinds listed in `REQ_REWRITE_ENABLED_KINDS` are eligible for rewrite
+- the current rewrite mode strips `#p` and `#e` from the upstream query and re-applies those tag checks locally on returned events
+
+This allows a relay-specific optimization such as:
+
+- `kind 1`: no rewrite
+- `kind 1984`: rewrite enabled
+
+Composite requests, including requests with multiple filter objects or multiple kinds, remain pass-through.
 
 ### Heavy single requests
 

@@ -5,11 +5,13 @@ import url from "url";
 import * as mime from "mime-types";
 import { v7 as uuidv7 } from "uuid";
 import WebSocket from "ws";
-import { blockedActionBanDurationSec, cidrRanges, concurrentReqBanDurationSec, concurrentReqBanThreshold, enableForwardReqHeaders, listenPort, logStartupConfig, maxConcurrentReqsPerSocket, maxTrackedReqsPerSocket, maxWebsocketPayloadSize, processingCostBlockDurationSec, processingCostBlockThresholdMs, reconnectBanDurationSec, reconnectBanThreshold, reconnectBanWindowSec, singleReqProcessingCostWarnThresholdMs, upstreamHttpUrl, upstreamWsForFastBotUrl, upstreamWsUrl } from "./config";
+import { blockedActionBanDurationSec, cidrRanges, concurrentReqBanDurationSec, concurrentReqBanThreshold, enableForwardReqHeaders, listenPort, logStartupConfig, maxConcurrentReqsPerSocket, maxTrackedReqsPerSocket, maxWebsocketPayloadSize, processingCostBlockDurationSec, processingCostBlockThresholdMs, reconnectBanDurationSec, reconnectBanThreshold, reconnectBanWindowSec, reqPlannerStatsFlushIntervalSec, reqPlannerStatsPath, singleReqProcessingCostWarnThresholdMs, upstreamHttpUrl, upstreamWsForFastBotUrl, upstreamWsUrl } from "./config";
 import { evaluateDownstreamEvent, evaluateUpstreamEvent, ipMatchesCidr } from "./filters";
 import { log } from "./logger";
 import { buildForwardHeaders, clearIdleTimeout, getClientAddress, getRequestedSubprotocols, resetIdleTimeout, setIdleTimeout } from "./network";
 import { acceptConnection, addProcessingCostForIP, blockIPByRule, getConnectionAttemptState, getConnectionCount, getSocketsForIP, recordConcurrentReqViolation, recordReconnectAttempt, releaseConnection, scheduleProcessingCostUnblock, scheduleRuleUnblock, unblockIPByProcessingCost, unblockIPByRule } from "./processing-state";
+import { loadReqPlannerStats, persistReqPlannerStats, recordReqExecutionStats } from "./req-planner-stats";
+import { planReqRewrite, shouldRelayRewrittenEvent } from "./req-rewrite";
 import { createSubscriptionTracker, SubscriptionTracker } from "./subscriptions";
 
 let upstreamWriteSocket = new WebSocket(upstreamWsForFastBotUrl);
@@ -38,6 +40,8 @@ function getActiveSubscriptionCountForIP(ip: string): number {
 }
 
 logStartupConfig();
+loadReqPlannerStats(path.resolve(__dirname, reqPlannerStatsPath));
+setInterval(() => persistReqPlannerStats(path.resolve(__dirname, reqPlannerStatsPath)), reqPlannerStatsFlushIntervalSec * 1000);
 
 async function handleProcessingCostUnblock(ip: string): Promise<void> {
   const { totalProcessingCostMsForIP, hadBlockedState } = await unblockIPByProcessingCost(ip);
@@ -202,20 +206,22 @@ function listen(): void {
 
           if (typeof processingCostMs === "number") {
             const reqPayload = subscriptionTracker.getReqPayload(subscriptionId);
+            const reqExecutionStats = subscriptionTracker.getReqExecutionStats(subscriptionId);
             subscriptionTracker.deleteReqTracking(subscriptionId);
             const { totalProcessingCostMsForIP, isNewlyBlocked, blockedUntil } = await addProcessingCostForIP(ip, processingCostMs);
+            if (reqExecutionStats) recordReqExecutionStats(reqExecutionStats, processingCostMs);
 
-            log("INFO", withTiming({ msg: "EOSE", ip, port, resultType, socketId, subscriptionId, processingCostMs, totalProcessingCostMsForIP, activeSubscriptionCountForSocket: subscriptionTracker.getActiveSubscriptionCount(), activeSubscriptionCountForIP: getActiveSubscriptionCountForIP(ip), ...(typeof blockedUntil === "number" ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() } : {}) }));
+            log("INFO", withTiming({ msg: "EOSE", ip, port, resultType, socketId, subscriptionId, processingCostMs, totalProcessingCostMsForIP, activeSubscriptionCountForSocket: subscriptionTracker.getActiveSubscriptionCount(), activeSubscriptionCountForIP: getActiveSubscriptionCountForIP(ip), ...(reqExecutionStats ? { reqShape: reqExecutionStats.shape, reqMode: reqExecutionStats.mode, upstreamEventCount: reqExecutionStats.upstreamEventCount, downstreamEventCount: reqExecutionStats.downstreamEventCount } : {}), ...(typeof blockedUntil === "number" ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() } : {}) }));
 
             if (singleReqProcessingCostWarnThresholdMs > 0 && processingCostMs >= singleReqProcessingCostWarnThresholdMs) {
-              log("WARN", withTiming({ msg: "HEAVY SINGLE REQ", ip, port, socketId, subscriptionId, processingCostMs, singleReqProcessingCostWarnThresholdMs, totalProcessingCostMsForIP, req: reqPayload, trackedReqsForSocket: subscriptionTracker.getTrackedReqsForSocket() }));
+              log("WARN", withTiming({ msg: "HEAVY SINGLE REQ", ip, port, socketId, subscriptionId, processingCostMs, singleReqProcessingCostWarnThresholdMs, totalProcessingCostMsForIP, req: reqPayload, ...(reqExecutionStats ? { reqShape: reqExecutionStats.shape, reqMode: reqExecutionStats.mode, upstreamEventCount: reqExecutionStats.upstreamEventCount, downstreamEventCount: reqExecutionStats.downstreamEventCount } : {}), trackedReqsForSocket: subscriptionTracker.getTrackedReqsForSocket() }));
             }
 
             if (isNewlyBlocked) {
               if (typeof blockedUntil === "number") {
                 await scheduleProcessingCostUnblock(ip, blockedUntil, handleProcessingCostUnblock);
               }
-              log("WARN", withTiming({ msg: "IP PROCESSING COST BLOCKED", ip, port, socketId, subscriptionId, processingCostMs, totalProcessingCostMsForIP, processingCostBlockThresholdMs, req: reqPayload, trackedReqsForSocket: subscriptionTracker.getTrackedReqsForSocket(), ...(typeof blockedUntil === "number" ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() } : {}) }));
+              log("WARN", withTiming({ msg: "IP PROCESSING COST BLOCKED", ip, port, socketId, subscriptionId, processingCostMs, totalProcessingCostMsForIP, processingCostBlockThresholdMs, req: reqPayload, ...(reqExecutionStats ? { reqShape: reqExecutionStats.shape, reqMode: reqExecutionStats.mode, upstreamEventCount: reqExecutionStats.upstreamEventCount, downstreamEventCount: reqExecutionStats.downstreamEventCount } : {}), trackedReqsForSocket: subscriptionTracker.getTrackedReqsForSocket(), ...(typeof blockedUntil === "number" ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() } : {}) }));
               const blockedMessage = JSON.stringify(["NOTICE", "blocked: Blocked by accumulated processing cost"]);
               const sockets = await getSocketsForIP(ip);
               for (const socket of sockets) {
@@ -231,6 +237,12 @@ function listen(): void {
           because = result[1];
         } else {
           const subscriptionId = result[1];
+          const reqExecutionStats = subscriptionTracker.getReqExecutionStats(subscriptionId);
+          if (resultType === "EVENT" && reqExecutionStats?.mode === "strip_p_e_tags") {
+            shouldRelay = shouldRelay && shouldRelayRewrittenEvent(subscriptionTracker.getReqPayload(subscriptionId), result[2]);
+            if (!shouldRelay && because === "") because = "Locally filtered rewritten REQ tags";
+          }
+          if (resultType === "EVENT") subscriptionTracker.recordUpstreamEvent(subscriptionId, shouldRelay);
           const subscriptionSize = await subscriptionTracker.addTransferredSize(subscriptionId, message.length);
           log("DEBUG", withTiming({ msg: "SUBSCRIBE", ip, port, resultType, socketId, subscriptionId, subscriptionSize }));
         }
@@ -253,20 +265,32 @@ function listen(): void {
 
     const connectionAttempt = await getConnectionAttemptState(ip);
     if (connectionAttempt.isProcessingCostBlocked) {
-      sendBlockedNoticeAndClose("Blocked by accumulated processing cost", 1008, "Forbidden", {
-        connectionCountForIP: connectionAttempt.connectionCountForIP,
-        totalProcessingCostMsForIP: connectionAttempt.totalProcessingCostMsForIP,
-        processingCostBlockThresholdMs,
-        processingCostBlockedUntil: connectionAttempt.processingCostBlockedUntil,
-      }, connectionAttempt.processingCostBlockedUntil);
+      sendBlockedNoticeAndClose(
+        "Blocked by accumulated processing cost",
+        1008,
+        "Forbidden",
+        {
+          connectionCountForIP: connectionAttempt.connectionCountForIP,
+          totalProcessingCostMsForIP: connectionAttempt.totalProcessingCostMsForIP,
+          processingCostBlockThresholdMs,
+          processingCostBlockedUntil: connectionAttempt.processingCostBlockedUntil,
+        },
+        connectionAttempt.processingCostBlockedUntil,
+      );
       return;
     }
 
     if (connectionAttempt.isRuleBlocked) {
-      sendBlockedNoticeAndClose(connectionAttempt.ruleBlockedReason ?? "Blocked by repeated blocked requests", 1008, "Forbidden", {
-        connectionCountForIP: connectionAttempt.connectionCountForIP,
-        ruleBlockedUntil: connectionAttempt.ruleBlockedUntil,
-      }, connectionAttempt.ruleBlockedUntil);
+      sendBlockedNoticeAndClose(
+        connectionAttempt.ruleBlockedReason ?? "Blocked by repeated blocked requests",
+        1008,
+        "Forbidden",
+        {
+          connectionCountForIP: connectionAttempt.connectionCountForIP,
+          ruleBlockedUntil: connectionAttempt.ruleBlockedUntil,
+        },
+        connectionAttempt.ruleBlockedUntil,
+      );
       return;
     }
 
@@ -344,6 +368,7 @@ function listen(): void {
         log("INFO", withTiming({ msg, ...(shouldRelay ? {} : { because }), ip, port, socketId, connectionCountForIP, event: event[1] }));
       } else if (event[0] === "REQ") {
         const subscriptionId = event[1];
+        const reqPayload = structuredClone(event.length === 3 ? event[2] : event.slice(2));
         const reqFilter = event[2];
         const isNewSubscription = !subscriptionTracker.hasActiveSubscription(subscriptionId);
         const activeSubscriptionCount = subscriptionTracker.getActiveSubscriptionCount();
@@ -365,11 +390,19 @@ function listen(): void {
           upstreamSocket.close();
           return;
         }
-        subscriptionTracker.trackReq(subscriptionId, reqFilter);
+        const rewritePlan = planReqRewrite(event);
+        event = rewritePlan.rewrittenEvent;
+        isMessageEdited = isMessageEdited || rewritePlan.isMessageEdited;
+        subscriptionTracker.trackReq(subscriptionId, reqPayload, rewritePlan.mode);
+        if (rewritePlan.mode !== "passthrough") {
+          log("INFO", withTiming({ msg: "REQ REWRITTEN", ip, port, socketId, connectionCountForIP, subscriptionId, mode: rewritePlan.mode, originalReq: reqPayload, rewrittenReq: event.length === 3 ? event[2] : event.slice(2) }));
+        }
         if (reqFilter.limit && reqFilter.limit > 500) {
           reqFilter.limit = 500;
           isMessageEdited = true;
-          subscriptionTracker.trackReq(subscriptionId, reqFilter);
+          if (typeof event[2] === "object" && event[2] !== null && !Array.isArray(event[2])) (event[2] as Record<string, unknown>).limit = 500;
+          const reqExecutionStats = subscriptionTracker.getReqExecutionStats(subscriptionId);
+          subscriptionTracker.trackReq(subscriptionId, reqFilter, reqExecutionStats?.mode ?? "passthrough");
         }
       } else if (event[0] === "CLOSE") {
         const subscriptionId = event[1];
