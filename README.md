@@ -88,6 +88,7 @@ BLOCKED_REQ_KINDS=
 BLOCK_EPHEMERAL_WRITES=true
 BLOCKED_WRITE_KINDS=1009,22668,22689,22608,22837,22817,22760,22628,20000,20001,1000
 WHITELISTED_PUBKEYS=
+WHITELISTED_IP_ADDR_1=144.202.104.225/32
 BLOCKED_IP_ADDR_1=43.205.189.224/32
 MUTE_FILTER_1=/spam/i
 MUTE_FILTER_2=/lnbc/
@@ -141,6 +142,8 @@ REQ_PLANNER_STATS_FLUSH_INTERVAL_SEC=60
   Comma-separated event kinds for downstream `EVENT` write blocking.
 - `WHITELISTED_PUBKEYS`
   Comma-separated hex pubkeys that bypass some filtering checks where applicable.
+- `WHITELISTED_IP_ADDR_*`
+  CIDR entries that bypass connection-side IP blocking such as CIDR deny, reconnect bans, concurrent-`REQ` bans, connection-count limits, and processing-cost connection blocking.
 - `BLOCKED_IP_ADDR_*`
   CIDR entries used to deny client connections immediately.
 - `MUTE_FILTER_*`

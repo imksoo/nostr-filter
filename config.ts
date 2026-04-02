@@ -20,6 +20,9 @@ export const contentFilters: RegExp[] = Object.keys(process.env)
 export const blockedPubkeys = typeof process.env.BLOCKED_PUBKEYS !== "undefined" && process.env.BLOCKED_PUBKEYS !== "" ? process.env.BLOCKED_PUBKEYS.split(",").map((pubkey) => pubkey.trim()) : [];
 
 export const whitelistedPubkeys = typeof process.env.WHITELISTED_PUBKEYS !== "undefined" && process.env.WHITELISTED_PUBKEYS !== "" ? process.env.WHITELISTED_PUBKEYS.split(",").map((pubkey) => pubkey.trim()) : [];
+export const whitelistedIpCidrs = Object.keys(process.env)
+  .filter((key) => key.startsWith("WHITELISTED_IP_ADDR_"))
+  .map((key) => process.env[key]!);
 export const blockedReqKinds =
   typeof process.env.BLOCKED_REQ_KINDS !== "undefined" && process.env.BLOCKED_REQ_KINDS !== ""
     ? process.env.BLOCKED_REQ_KINDS.split(",")
@@ -78,6 +81,7 @@ export function logStartupConfig(): void {
     blockedReqKinds,
     blockedWriteKinds,
     blockEphemeralWrites,
+    whitelistedIpAddresses: whitelistedIpCidrs,
     blockedIPAddresses: cidrRanges,
     processingCostBlockThresholdMs,
     processingCostBlockDurationSec,
