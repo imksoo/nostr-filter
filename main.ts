@@ -5,12 +5,12 @@ import url from "url";
 import * as mime from "mime-types";
 import { v7 as uuidv7 } from "uuid";
 import WebSocket from "ws";
-import { blockedActionBanDurationSec, cidrRanges, concurrentReqBanDurationSec, concurrentReqBanThreshold, enableForwardReqHeaders, listenPort, logStartupConfig, maxConcurrentReqsPerSocket, maxTrackedReqsPerSocket, maxWebsocketPayloadSize, processingCostBlockDurationSec, processingCostBlockThresholdMs, reconnectBanDurationSec, reconnectBanThreshold, reconnectBanWindowSec, reqPlannerStatsFlushIntervalSec, reqPlannerStatsPath, singleReqProcessingCostWarnThresholdMs, upstreamHttpUrl, upstreamWsForFastBotUrl, upstreamWsUrl, whitelistedIpCidrs } from "./config";
+import { blockedActionBanDurationSec, cidrRanges, concurrentReqBanDurationSec, concurrentReqBanThreshold, enableForwardReqHeaders, listenPort, logStartupConfig, maxConcurrentReqsPerSocket, maxTrackedReqsPerSocket, maxWebsocketPayloadSize, processingCostBlockDurationSec, processingCostBlockThresholdMs, reconnectBanDurationSec, reconnectBanThreshold, reconnectBanWindowSec, reqDualRunEnabledKinds, reqDualRunSampleRate, reqPlannerStatsFlushIntervalSec, reqPlannerStatsPath, singleReqProcessingCostWarnThresholdMs, upstreamHttpUrl, upstreamWsForFastBotUrl, upstreamWsUrl, whitelistedIpCidrs } from "./config";
 import { evaluateDownstreamEvent, evaluateUpstreamEvent, ipMatchesCidr } from "./filters";
 import { log } from "./logger";
 import { buildForwardHeaders, clearIdleTimeout, getClientAddress, getRequestedSubprotocols, resetIdleTimeout, setIdleTimeout } from "./network";
 import { acceptConnection, addProcessingCostForIP, blockIPByRule, getConnectionAttemptState, getConnectionCount, getSocketsForIP, recordConcurrentReqViolation, recordReconnectAttempt, releaseConnection, scheduleProcessingCostUnblock, scheduleRuleUnblock, unblockIPByProcessingCost, unblockIPByRule } from "./processing-state";
-import { loadReqPlannerStats, persistReqPlannerStats, recordReqExecutionStats } from "./req-planner-stats";
+import { getReqPlanExperimentCandidate, getReqPlanRecommendation, loadReqPlannerStats, persistReqPlannerStats, recordReqExecutionStats } from "./req-planner-stats";
 import { planReqRewrite, shouldRelayRewrittenEvent } from "./req-rewrite";
 import { createSubscriptionTracker, SubscriptionTracker } from "./subscriptions";
 
@@ -126,6 +126,18 @@ function listen(): void {
     const requestedSubprotocols = getRequestedSubprotocols(req);
     const wsClientOptions = enableForwardReqHeaders ? { headers: buildForwardHeaders(req, clientAddress) } : undefined;
     const upstreamSocket = requestedSubprotocols ? new WebSocket(upstreamWsUrl, requestedSubprotocols, wsClientOptions) : new WebSocket(upstreamWsUrl, wsClientOptions);
+    const dualRunShadowToPrimary = new Map<string, string>();
+    const dualRunValidations = new Map<
+      string,
+      {
+        authoritativeEventIds: Set<string>;
+        shadowEventIds: Set<string>;
+        authoritativeUpstreamEventCount: number;
+        shadowUpstreamEventCount: number;
+        authoritativeProcessingCostMs?: number;
+        shadowProcessingCostMs?: number;
+      }
+    >();
 
     function beginSocketTermination(): boolean {
       if (isSocketTerminating) return false;
@@ -155,6 +167,52 @@ function listen(): void {
       closeUpstreamSocket();
       downstreamSocket.send(blockedMessage);
       downstreamSocket.close(closeCode, closeReason);
+    }
+
+    function shouldStartDualRun(reqExecutionStats: ReturnType<typeof subscriptionTracker.getReqExecutionStats>, experimentCandidate: ReturnType<typeof getReqPlanExperimentCandidate> | undefined): boolean {
+      if (!reqExecutionStats || !experimentCandidate?.shouldExperiment || reqDualRunSampleRate <= 0) return false;
+      if (experimentCandidate.challengerMode !== "strip_p_e_tags") return false;
+      if (reqDualRunEnabledKinds.length > 0 && !reqExecutionStats.analysis.filters.some((analysis) => analysis.kinds.some((kind) => reqDualRunEnabledKinds.includes(kind)))) return false;
+      return Math.random() < reqDualRunSampleRate;
+    }
+
+    function getDualRunShadowSubscriptionId(subscriptionId: string): string {
+      return `${subscriptionId}__dual_run__strip_p_e_tags`;
+    }
+
+    function finalizeDualRunValidation(primarySubscriptionId: string): void {
+      const validation = dualRunValidations.get(primarySubscriptionId);
+      const reqExecutionStats = subscriptionTracker.getReqExecutionStats(primarySubscriptionId);
+      if (!validation || typeof validation.authoritativeProcessingCostMs !== "number" || typeof validation.shadowProcessingCostMs !== "number") return;
+
+      const authoritativeEventIds = [...validation.authoritativeEventIds];
+      const shadowEventIds = [...validation.shadowEventIds];
+      const missingEventIds = authoritativeEventIds.filter((eventId) => !validation.shadowEventIds.has(eventId));
+      const unexpectedEventIds = shadowEventIds.filter((eventId) => !validation.authoritativeEventIds.has(eventId));
+
+      log(
+        "INFO",
+        withTiming({
+          msg: "REQ DUAL RUN VALIDATION",
+          ip,
+          port,
+          socketId,
+          subscriptionId: primarySubscriptionId,
+          authoritativeMode: "passthrough",
+          shadowMode: "strip_p_e_tags",
+          authoritativeProcessingCostMs: validation.authoritativeProcessingCostMs,
+          shadowProcessingCostMs: validation.shadowProcessingCostMs,
+          authoritativeUpstreamEventCount: validation.authoritativeUpstreamEventCount,
+          shadowUpstreamEventCount: validation.shadowUpstreamEventCount,
+          missingEventCount: missingEventIds.length,
+          unexpectedEventCount: unexpectedEventIds.length,
+          missingEventIds: missingEventIds.slice(0, 10),
+          unexpectedEventIds: unexpectedEventIds.slice(0, 10),
+          ...(reqExecutionStats ? { reqShape: reqExecutionStats.shape, reqAnalysisSignature: reqExecutionStats.analysis.signature } : {}),
+        }),
+      );
+
+      dualRunValidations.delete(primarySubscriptionId);
     }
 
     function connectUpstream(): void {
@@ -206,6 +264,15 @@ function listen(): void {
           log("DEBUG", withTiming({ msg: "NOTICE", ip, port, resultType, socketId, message: result }));
         } else if (resultType === "EOSE") {
           const subscriptionId = result[1];
+          const primarySubscriptionId = dualRunShadowToPrimary.get(subscriptionId);
+          if (primarySubscriptionId) {
+            const reqStartedAt = subscriptionTracker.getReqStartedAt(subscriptionId);
+            const validation = dualRunValidations.get(primarySubscriptionId);
+            if (validation && typeof reqStartedAt === "number") validation.shadowProcessingCostMs = Date.now() - reqStartedAt;
+            subscriptionTracker.deleteReqTracking(subscriptionId);
+            finalizeDualRunValidation(primarySubscriptionId);
+            return;
+          }
           const reqStartedAt = subscriptionTracker.getReqStartedAt(subscriptionId);
           const processingCostMs = typeof reqStartedAt === "number" ? Date.now() - reqStartedAt : undefined;
 
@@ -215,18 +282,21 @@ function listen(): void {
             subscriptionTracker.deleteReqTracking(subscriptionId);
             const { totalProcessingCostMsForIP, isNewlyBlocked, blockedUntil } = await addProcessingCostForIP(ip, processingCostMs);
             if (reqExecutionStats) recordReqExecutionStats(reqExecutionStats, processingCostMs);
+            const validation = dualRunValidations.get(subscriptionId);
+            if (validation) validation.authoritativeProcessingCostMs = processingCostMs;
 
-            log("INFO", withTiming({ msg: "EOSE", ip, port, resultType, socketId, subscriptionId, processingCostMs, totalProcessingCostMsForIP, activeSubscriptionCountForSocket: subscriptionTracker.getActiveSubscriptionCount(), activeSubscriptionCountForIP: getActiveSubscriptionCountForIP(ip), ...(reqExecutionStats ? { reqShape: reqExecutionStats.shape, reqMode: reqExecutionStats.mode, upstreamEventCount: reqExecutionStats.upstreamEventCount, downstreamEventCount: reqExecutionStats.downstreamEventCount } : {}), ...(typeof blockedUntil === "number" ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() } : {}) }));
+            log("INFO", withTiming({ msg: "EOSE", ip, port, resultType, socketId, subscriptionId, processingCostMs, totalProcessingCostMsForIP, activeSubscriptionCountForSocket: subscriptionTracker.getActiveSubscriptionCount(), activeSubscriptionCountForIP: getActiveSubscriptionCountForIP(ip), ...(reqExecutionStats ? { reqShape: reqExecutionStats.shape, reqAnalysisSignature: reqExecutionStats.analysis.signature, reqCandidatePlans: reqExecutionStats.analysis.candidatePlans, reqMode: reqExecutionStats.mode, upstreamEventCount: reqExecutionStats.upstreamEventCount, downstreamEventCount: reqExecutionStats.downstreamEventCount } : {}), ...(typeof blockedUntil === "number" ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() } : {}) }));
+            finalizeDualRunValidation(subscriptionId);
 
             if (singleReqProcessingCostWarnThresholdMs > 0 && processingCostMs >= singleReqProcessingCostWarnThresholdMs) {
-              log("WARN", withTiming({ msg: "HEAVY SINGLE REQ", ip, port, socketId, subscriptionId, processingCostMs, singleReqProcessingCostWarnThresholdMs, totalProcessingCostMsForIP, req: reqPayload, ...(reqExecutionStats ? { reqShape: reqExecutionStats.shape, reqMode: reqExecutionStats.mode, upstreamEventCount: reqExecutionStats.upstreamEventCount, downstreamEventCount: reqExecutionStats.downstreamEventCount } : {}), trackedReqsForSocket: subscriptionTracker.getTrackedReqsForSocket() }));
+              log("WARN", withTiming({ msg: "HEAVY SINGLE REQ", ip, port, socketId, subscriptionId, processingCostMs, singleReqProcessingCostWarnThresholdMs, totalProcessingCostMsForIP, req: reqPayload, ...(reqExecutionStats ? { reqShape: reqExecutionStats.shape, reqAnalysisSignature: reqExecutionStats.analysis.signature, reqCandidatePlans: reqExecutionStats.analysis.candidatePlans, reqFilters: reqExecutionStats.analysis.filters, reqMode: reqExecutionStats.mode, upstreamEventCount: reqExecutionStats.upstreamEventCount, downstreamEventCount: reqExecutionStats.downstreamEventCount } : {}), trackedReqsForSocket: subscriptionTracker.getTrackedReqsForSocket() }));
             }
 
             if (!isWhitelistedClientIP && isNewlyBlocked) {
               if (typeof blockedUntil === "number") {
                 await scheduleProcessingCostUnblock(ip, blockedUntil, handleProcessingCostUnblock);
               }
-              log("WARN", withTiming({ msg: "IP PROCESSING COST BLOCKED", ip, port, socketId, subscriptionId, processingCostMs, totalProcessingCostMsForIP, processingCostBlockThresholdMs, req: reqPayload, ...(reqExecutionStats ? { reqShape: reqExecutionStats.shape, reqMode: reqExecutionStats.mode, upstreamEventCount: reqExecutionStats.upstreamEventCount, downstreamEventCount: reqExecutionStats.downstreamEventCount } : {}), trackedReqsForSocket: subscriptionTracker.getTrackedReqsForSocket(), ...(typeof blockedUntil === "number" ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() } : {}) }));
+              log("WARN", withTiming({ msg: "IP PROCESSING COST BLOCKED", ip, port, socketId, subscriptionId, processingCostMs, totalProcessingCostMsForIP, processingCostBlockThresholdMs, req: reqPayload, ...(reqExecutionStats ? { reqShape: reqExecutionStats.shape, reqAnalysisSignature: reqExecutionStats.analysis.signature, reqCandidatePlans: reqExecutionStats.analysis.candidatePlans, reqFilters: reqExecutionStats.analysis.filters, reqMode: reqExecutionStats.mode, upstreamEventCount: reqExecutionStats.upstreamEventCount, downstreamEventCount: reqExecutionStats.downstreamEventCount } : {}), trackedReqsForSocket: subscriptionTracker.getTrackedReqsForSocket(), ...(typeof blockedUntil === "number" ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() } : {}) }));
               const blockedMessage = JSON.stringify(["NOTICE", "blocked: Blocked by accumulated processing cost"]);
               const sockets = await getSocketsForIP(ip);
               for (const socket of sockets) {
@@ -242,12 +312,30 @@ function listen(): void {
           because = result[1];
         } else {
           const subscriptionId = result[1];
+          const primarySubscriptionId = dualRunShadowToPrimary.get(subscriptionId);
+          if (primarySubscriptionId && resultType === "EVENT") {
+            const validation = dualRunValidations.get(primarySubscriptionId);
+            if (validation) {
+              validation.shadowUpstreamEventCount += 1;
+              if (shouldRelayRewrittenEvent(subscriptionTracker.getReqPayload(primarySubscriptionId), result[2]) && typeof result[2]?.id === "string") {
+                validation.shadowEventIds.add(result[2].id);
+              }
+            }
+            return;
+          }
           const reqExecutionStats = subscriptionTracker.getReqExecutionStats(subscriptionId);
           if (resultType === "EVENT" && reqExecutionStats?.mode === "strip_p_e_tags") {
             shouldRelay = shouldRelay && shouldRelayRewrittenEvent(subscriptionTracker.getReqPayload(subscriptionId), result[2]);
             if (!shouldRelay && because === "") because = "Locally filtered rewritten REQ tags";
           }
           if (resultType === "EVENT") subscriptionTracker.recordUpstreamEvent(subscriptionId, shouldRelay);
+          if (resultType === "EVENT") {
+            const validation = dualRunValidations.get(subscriptionId);
+            if (validation) {
+              validation.authoritativeUpstreamEventCount += 1;
+              if (shouldRelay && typeof result[2]?.id === "string") validation.authoritativeEventIds.add(result[2].id);
+            }
+          }
           const subscriptionSize = await subscriptionTracker.addTransferredSize(subscriptionId, message.length);
           log("DEBUG", withTiming({ msg: "SUBSCRIBE", ip, port, resultType, socketId, subscriptionId, subscriptionSize }));
         }
@@ -343,6 +431,7 @@ function listen(): void {
       let shouldRelay = true;
       let because = "";
       let isMessageEdited = false;
+      let shadowMessage: string | undefined;
 
       if (event[0] === "EVENT") {
         const decision = evaluateDownstreamEvent(event);
@@ -396,11 +485,67 @@ function listen(): void {
           return;
         }
         const rewritePlan = planReqRewrite(event);
-        event = rewritePlan.rewrittenEvent;
-        isMessageEdited = isMessageEdited || rewritePlan.isMessageEdited;
         subscriptionTracker.trackReq(subscriptionId, reqPayload, rewritePlan.mode);
+        const reqExecutionStats = subscriptionTracker.getReqExecutionStats(subscriptionId);
+        const reqPlanRecommendation = reqExecutionStats ? getReqPlanRecommendation(reqExecutionStats.analysis) : undefined;
+        const reqPlanExperimentCandidate = reqPlanRecommendation ? getReqPlanExperimentCandidate(reqPlanRecommendation) : undefined;
+        const shouldDualRunReq = shouldStartDualRun(reqExecutionStats, reqPlanExperimentCandidate);
+        if (shouldDualRunReq && rewritePlan.isMessageEdited) {
+          subscriptionTracker.trackReq(subscriptionId, reqPayload, "passthrough");
+          const shadowSubscriptionId = getDualRunShadowSubscriptionId(subscriptionId);
+          const shadowEvent = [event[0], shadowSubscriptionId, ...rewritePlan.rewrittenEvent.slice(2)];
+          shadowMessage = JSON.stringify(shadowEvent);
+          dualRunShadowToPrimary.set(shadowSubscriptionId, subscriptionId);
+          dualRunValidations.set(subscriptionId, {
+            authoritativeEventIds: new Set(),
+            shadowEventIds: new Set(),
+            authoritativeUpstreamEventCount: 0,
+            shadowUpstreamEventCount: 0,
+          });
+          subscriptionTracker.trackReq(shadowSubscriptionId, reqPayload, "strip_p_e_tags");
+          log("INFO", withTiming({ msg: "REQ DUAL RUN START", ip, port, socketId, connectionCountForIP, subscriptionId, shadowSubscriptionId, authoritativeMode: "passthrough", shadowMode: "strip_p_e_tags", originalReq: reqPayload, shadowReq: shadowEvent.slice(2), recommendationBasis: reqPlanRecommendation?.basis, experimentReason: reqPlanExperimentCandidate?.reason }));
+        } else {
+          event = rewritePlan.rewrittenEvent;
+          isMessageEdited = isMessageEdited || rewritePlan.isMessageEdited;
+        }
+        if (reqPlanRecommendation) {
+          log(
+            "DEBUG",
+            withTiming({
+              msg: "REQ PLAN CHOSEN",
+              ip,
+              port,
+              socketId,
+              connectionCountForIP,
+              subscriptionId,
+              chosenMode: shouldDualRunReq ? "passthrough" : rewritePlan.mode,
+              recommendedMode: reqPlanRecommendation.recommendedMode,
+              recommendationBasis: reqPlanRecommendation.basis,
+              reqShape: reqExecutionStats?.shape,
+              reqShapeCounts: reqExecutionStats
+                ? {
+                    filterCount: reqExecutionStats.shape.filterCount,
+                    kinds: reqExecutionStats.shape.kinds,
+                    idsCount: reqExecutionStats.shape.idsCount,
+                    authorsCount: reqExecutionStats.shape.authorsCount,
+                    pTagCount: reqExecutionStats.shape.pTagCount,
+                    eTagCount: reqExecutionStats.shape.eTagCount,
+                    totalTagValueCount: reqExecutionStats.shape.totalTagValueCount,
+                  }
+                : undefined,
+              reqAnalysisSignature: reqPlanRecommendation.signature,
+              reqCandidatePlans: reqPlanRecommendation.consideredModes,
+              reqActiveRewriteModes: reqExecutionStats?.analysis.activeRewriteModes ?? [],
+              reqPlanStatsByMode: reqPlanRecommendation.statsByMode,
+              reqPlanHeuristic: reqPlanRecommendation.heuristic,
+            }),
+          );
+        }
+        if (reqPlanExperimentCandidate?.shouldExperiment) {
+          log("DEBUG", withTiming({ msg: "REQ PLAN EXPERIMENT CANDIDATE", ip, port, socketId, connectionCountForIP, subscriptionId, chosenMode: rewritePlan.mode, recommendedMode: reqPlanExperimentCandidate.recommendedMode, challengerMode: reqPlanExperimentCandidate.challengerMode, reason: reqPlanExperimentCandidate.reason, sampleCountByMode: reqPlanExperimentCandidate.sampleCountByMode, costDeltaMs: reqPlanExperimentCandidate.costDeltaMs, reqAnalysisSignature: reqPlanRecommendation?.signature }));
+        }
         if (rewritePlan.mode !== "passthrough") {
-          log("INFO", withTiming({ msg: "REQ REWRITTEN", ip, port, socketId, connectionCountForIP, subscriptionId, mode: rewritePlan.mode, originalReq: reqPayload, rewrittenReq: event.length === 3 ? event[2] : event.slice(2) }));
+          log("INFO", withTiming({ msg: "REQ REWRITTEN", ip, port, socketId, connectionCountForIP, subscriptionId, mode: rewritePlan.mode, originalReq: reqPayload, rewrittenReq: event.length === 3 ? event[2] : event.slice(2), ...(reqExecutionStats ? { reqShape: reqExecutionStats.shape, reqAnalysisSignature: reqExecutionStats.analysis.signature, reqCandidatePlans: reqExecutionStats.analysis.candidatePlans, reqFilters: reqExecutionStats.analysis.filters } : {}) }));
         }
         if (reqFilter.limit && reqFilter.limit > 500) {
           reqFilter.limit = 500;
@@ -411,6 +556,13 @@ function listen(): void {
         }
       } else if (event[0] === "CLOSE") {
         const subscriptionId = event[1];
+        const shadowSubscriptionId = getDualRunShadowSubscriptionId(subscriptionId);
+        if (dualRunShadowToPrimary.has(shadowSubscriptionId)) {
+          dualRunShadowToPrimary.delete(shadowSubscriptionId);
+          dualRunValidations.delete(subscriptionId);
+          subscriptionTracker.forgetSubscription(shadowSubscriptionId);
+          if (upstreamSocket.readyState === WebSocket.OPEN) upstreamSocket.send(JSON.stringify(["CLOSE", shadowSubscriptionId]));
+        }
         subscriptionTracker.forgetSubscription(subscriptionId);
         log("DEBUG", withTiming({ msg: "CLOSE SUBSCRIPTION", ip, port, socketId, connectionCountForIP, subscriptionId, req: event[2], subscriptionSize: subscriptionTracker.getTransferredSize(subscriptionId) }));
       } else {
@@ -434,6 +586,7 @@ function listen(): void {
 
           if (upstreamSocket.readyState === WebSocket.OPEN) {
             upstreamSocket.send(msg);
+            if (shadowMessage) upstreamSocket.send(shadowMessage);
             isMessageSent = true;
             if (retryCount > 0) {
               log("DEBUG", withTiming({ msg: "RETRY SUCCEEDED", ip, port, socketId, connectionCountForIP, retryCount }));

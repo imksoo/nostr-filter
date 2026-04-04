@@ -66,6 +66,18 @@ export const reqRewriteDisabledKinds =
         .map((kind) => parseInt(kind.trim(), 10))
         .filter((kind) => !Number.isNaN(kind))
     : [1];
+export const reqDualRunEnabledKinds =
+  typeof process.env.REQ_DUAL_RUN_ENABLED_KINDS !== "undefined" && process.env.REQ_DUAL_RUN_ENABLED_KINDS !== ""
+    ? process.env.REQ_DUAL_RUN_ENABLED_KINDS.split(",")
+        .map((kind) => parseInt(kind.trim(), 10))
+        .filter((kind) => !Number.isNaN(kind))
+    : [];
+export const reqDualRunSampleRate = Number.parseFloat(process.env.REQ_DUAL_RUN_SAMPLE_RATE ?? "0");
+export const reqPlanRewriteMinSampleCount = parseInt(process.env.REQ_PLAN_REWRITE_MIN_SAMPLE_COUNT ?? "20");
+export const reqPlanRewriteMinAvgProcessingCostMs = parseInt(process.env.REQ_PLAN_REWRITE_MIN_AVG_PROCESSING_COST_MS ?? "250");
+export const reqPlanRewriteMaxAvgResultDensityPerAuthorTagUnit = Number.parseFloat(process.env.REQ_PLAN_REWRITE_MAX_AVG_RESULT_DENSITY_PER_AUTHOR_TAG_UNIT ?? "0.05");
+export const reqPlanRewriteMaxAvgDownstreamEventCount = Number.parseFloat(process.env.REQ_PLAN_REWRITE_MAX_AVG_DOWNSTREAM_EVENT_COUNT ?? "1");
+export const reqPlanRewriteMinTotalTagValueCount = parseInt(process.env.REQ_PLAN_REWRITE_MIN_TOTAL_TAG_VALUE_COUNT ?? "2");
 export const reqPlannerStatsPath = process.env.REQ_PLANNER_STATS_PATH ?? "./data/req-planner-stats.json";
 export const reqPlannerStatsFlushIntervalSec = parseInt(process.env.REQ_PLANNER_STATS_FLUSH_INTERVAL_SEC ?? "60");
 
@@ -96,6 +108,13 @@ export function logStartupConfig(): void {
     reconnectBanDurationSec,
     reqRewriteEnabledKinds,
     reqRewriteDisabledKinds,
+    reqDualRunEnabledKinds,
+    reqDualRunSampleRate,
+    reqPlanRewriteMinSampleCount,
+    reqPlanRewriteMinAvgProcessingCostMs,
+    reqPlanRewriteMaxAvgResultDensityPerAuthorTagUnit,
+    reqPlanRewriteMaxAvgDownstreamEventCount,
+    reqPlanRewriteMinTotalTagValueCount,
     reqPlannerStatsPath,
     reqPlannerStatsFlushIntervalSec,
   });

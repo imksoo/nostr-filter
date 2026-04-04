@@ -110,6 +110,13 @@ MAX_TRACKED_REQS_PER_SOCKET=100
 MAX_CONCURRENT_REQS_PER_SOCKET=16
 REQ_REWRITE_ENABLED_KINDS=1984
 REQ_REWRITE_DISABLED_KINDS=1
+REQ_DUAL_RUN_ENABLED_KINDS=
+REQ_DUAL_RUN_SAMPLE_RATE=0
+REQ_PLAN_REWRITE_MIN_SAMPLE_COUNT=20
+REQ_PLAN_REWRITE_MIN_AVG_PROCESSING_COST_MS=250
+REQ_PLAN_REWRITE_MAX_AVG_RESULT_DENSITY_PER_AUTHOR_TAG_UNIT=0.05
+REQ_PLAN_REWRITE_MAX_AVG_DOWNSTREAM_EVENT_COUNT=1
+REQ_PLAN_REWRITE_MIN_TOTAL_TAG_VALUE_COUNT=2
 REQ_PLANNER_STATS_PATH=./data/req-planner-stats.json
 REQ_PLANNER_STATS_FLUSH_INTERVAL_SEC=60
 ```
@@ -174,6 +181,20 @@ REQ_PLANNER_STATS_FLUSH_INTERVAL_SEC=60
   Comma-separated kinds eligible for local `REQ` rewrite. The current rewrite strips `#p` and `#e` from single-filter, single-kind requests before forwarding upstream, then applies those tag checks locally.
 - `REQ_REWRITE_DISABLED_KINDS`
   Comma-separated kinds that must never be rewritten. This is useful for keeping common cases such as `kind 1` in pass-through mode.
+- `REQ_DUAL_RUN_ENABLED_KINDS`
+  Optional comma-separated kinds eligible for speculative dual-run validation. Leave empty to allow any rewrite-eligible kind. In dual-run mode the original `REQ` remains authoritative, while a rewritten shadow query runs only for comparison.
+- `REQ_DUAL_RUN_SAMPLE_RATE`
+  Sampling rate between `0` and `1` used for dual-run experiment candidates. `0` disables dual-run validation.
+- `REQ_PLAN_REWRITE_MIN_SAMPLE_COUNT`
+  Minimum historical sample count required before density/cost heuristics can auto-prefer a rewritten plan.
+- `REQ_PLAN_REWRITE_MIN_AVG_PROCESSING_COST_MS`
+  Minimum average processing cost required before density/cost heuristics consider rewriting.
+- `REQ_PLAN_REWRITE_MAX_AVG_RESULT_DENSITY_PER_AUTHOR_TAG_UNIT`
+  Maximum average downstream density per author-tag unit that still counts as sparse enough to prefer rewriting.
+- `REQ_PLAN_REWRITE_MAX_AVG_DOWNSTREAM_EVENT_COUNT`
+  Maximum average downstream event count that still counts as sparse enough to prefer rewriting.
+- `REQ_PLAN_REWRITE_MIN_TOTAL_TAG_VALUE_COUNT`
+  Minimum combined `#p + #e` tag value count required before density/cost heuristics may prefer rewriting.
 - `REQ_PLANNER_STATS_PATH`
   File used to persist REQ-shape planning statistics across restarts.
 - `REQ_PLANNER_STATS_FLUSH_INTERVAL_SEC`
@@ -219,6 +240,15 @@ These statistics are:
 
 The filter emits `REQ SHAPE STATS` summaries as samples accumulate. This is meant to answer questions such as whether `kind 1984` with multiple `#p` tags should eventually be rewritten before reaching `strfry`.
 
+It also emits:
+
+- `REQ SIGNATURE STATS`
+  More specific aggregates for a normalized filter signature.
+- `REQ PLAN CHOSEN`
+  The currently selected plan and the planner recommendation from historical data.
+- `REQ PLAN EXPERIMENT CANDIDATE`
+  Queries whose observed history is still too thin or too close to call, making them candidates for future speculative validation.
+
 ### Kind-based REQ rewrite
 
 Before forwarding a `REQ` upstream, `nostr-filter` can rewrite some single-kind requests.
@@ -237,6 +267,24 @@ This allows a relay-specific optimization such as:
 - `kind 1984`: rewrite enabled
 
 Composite requests, including requests with multiple filter objects or multiple kinds, remain pass-through.
+
+### Speculative dual-run validation
+
+`nostr-filter` can also prepare for future speculative execution by marking some requests as dual-run candidates.
+
+The intended model is:
+
+- keep the original upstream `REQ` as the authoritative result
+- run a rewritten shadow `REQ` in parallel only for validation
+- compare the rewritten result set against the authoritative one
+- log missing or unexpected event IDs before ever trusting the rewritten path
+
+When enabled for selected kinds with `REQ_DUAL_RUN_ENABLED_KINDS` and a non-zero `REQ_DUAL_RUN_SAMPLE_RATE`, the filter starts logging:
+
+- `REQ DUAL RUN START`
+- `REQ DUAL RUN VALIDATION`
+
+These logs are designed to answer whether a rewrite is not only faster, but also semantically safe.
 
 ### Heavy single requests
 
