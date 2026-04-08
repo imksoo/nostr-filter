@@ -12,6 +12,7 @@ import { buildForwardHeaders, clearIdleTimeout, getClientAddress, getRequestedSu
 import { acceptConnection, addProcessingCostForIP, blockIPByRule, getConnectionAttemptState, getConnectionCount, getSocketsForIP, recordConcurrentReqViolation, recordReconnectAttempt, releaseConnection, scheduleProcessingCostUnblock, scheduleRuleUnblock, unblockIPByProcessingCost, unblockIPByRule } from "./processing-state";
 import { getReqPlanExperimentCandidate, getReqPlanRecommendation, loadReqPlannerStats, persistReqPlannerStats, recordReqExecutionStats } from "./req-planner-stats";
 import { planReqRewrite, shouldRelayRewrittenEvent } from "./req-rewrite";
+import { refreshReqSplitAuthorsPolicy } from "./req-split-authors-policy";
 import { createSubscriptionTracker, SubscriptionTracker } from "./subscriptions";
 
 let upstreamWriteSocket = new WebSocket(upstreamWsForFastBotUrl);
@@ -130,6 +131,8 @@ function listen(): void {
     const dualRunValidations = new Map<
       string,
       {
+        shadowSubscriptionId: string;
+        shadowMode: "strip_p_e_tags" | "split_authors";
         authoritativeEventIds: Set<string>;
         shadowEventIds: Set<string>;
         authoritativeUpstreamEventCount: number;
@@ -171,13 +174,13 @@ function listen(): void {
 
     function shouldStartDualRun(reqExecutionStats: ReturnType<typeof subscriptionTracker.getReqExecutionStats>, experimentCandidate: ReturnType<typeof getReqPlanExperimentCandidate> | undefined): boolean {
       if (!reqExecutionStats || !experimentCandidate?.shouldExperiment || reqDualRunSampleRate <= 0) return false;
-      if (experimentCandidate.challengerMode !== "strip_p_e_tags") return false;
+      if (!experimentCandidate.challengerMode || experimentCandidate.challengerMode === "passthrough") return false;
       if (reqDualRunEnabledKinds.length > 0 && !reqExecutionStats.analysis.filters.some((analysis) => analysis.kinds.some((kind) => reqDualRunEnabledKinds.includes(kind)))) return false;
       return Math.random() < reqDualRunSampleRate;
     }
 
-    function getDualRunShadowSubscriptionId(subscriptionId: string): string {
-      return `${subscriptionId}__dual_run__strip_p_e_tags`;
+    function getDualRunShadowSubscriptionId(subscriptionId: string, shadowMode: "strip_p_e_tags" | "split_authors"): string {
+      return `${subscriptionId}__dual_run__${shadowMode}`;
     }
 
     function finalizeDualRunValidation(primarySubscriptionId: string): void {
@@ -199,7 +202,7 @@ function listen(): void {
           socketId,
           subscriptionId: primarySubscriptionId,
           authoritativeMode: "passthrough",
-          shadowMode: "strip_p_e_tags",
+          shadowMode: validation.shadowMode,
           authoritativeProcessingCostMs: validation.authoritativeProcessingCostMs,
           shadowProcessingCostMs: validation.shadowProcessingCostMs,
           authoritativeUpstreamEventCount: validation.authoritativeUpstreamEventCount,
@@ -280,12 +283,12 @@ function listen(): void {
             const reqPayload = subscriptionTracker.getReqPayload(subscriptionId);
             const reqExecutionStats = subscriptionTracker.getReqExecutionStats(subscriptionId);
             subscriptionTracker.deleteReqTracking(subscriptionId);
-            const { totalProcessingCostMsForIP, isNewlyBlocked, blockedUntil } = await addProcessingCostForIP(ip, processingCostMs);
+            const { totalProcessingCostMsForIP, chargedProcessingCostMs, isNewlyBlocked, blockedUntil } = await addProcessingCostForIP(ip, processingCostMs);
             if (reqExecutionStats) recordReqExecutionStats(reqExecutionStats, processingCostMs);
             const validation = dualRunValidations.get(subscriptionId);
             if (validation) validation.authoritativeProcessingCostMs = processingCostMs;
 
-            log("INFO", withTiming({ msg: "EOSE", ip, port, resultType, socketId, subscriptionId, processingCostMs, totalProcessingCostMsForIP, activeSubscriptionCountForSocket: subscriptionTracker.getActiveSubscriptionCount(), activeSubscriptionCountForIP: getActiveSubscriptionCountForIP(ip), ...(reqExecutionStats ? { reqShape: reqExecutionStats.shape, reqAnalysisSignature: reqExecutionStats.analysis.signature, reqCandidatePlans: reqExecutionStats.analysis.candidatePlans, reqMode: reqExecutionStats.mode, upstreamEventCount: reqExecutionStats.upstreamEventCount, downstreamEventCount: reqExecutionStats.downstreamEventCount } : {}), ...(typeof blockedUntil === "number" ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() } : {}) }));
+            log("INFO", withTiming({ msg: "EOSE", ip, port, resultType, socketId, subscriptionId, processingCostMs, chargedProcessingCostMs, totalProcessingCostMsForIP, activeSubscriptionCountForSocket: subscriptionTracker.getActiveSubscriptionCount(), activeSubscriptionCountForIP: getActiveSubscriptionCountForIP(ip), ...(reqExecutionStats ? { reqShape: reqExecutionStats.shape, reqAnalysisSignature: reqExecutionStats.analysis.signature, reqCandidatePlans: reqExecutionStats.analysis.candidatePlans, reqMode: reqExecutionStats.mode, upstreamEventCount: reqExecutionStats.upstreamEventCount, downstreamEventCount: reqExecutionStats.downstreamEventCount } : {}), ...(typeof blockedUntil === "number" ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() } : {}) }));
             finalizeDualRunValidation(subscriptionId);
 
             if (singleReqProcessingCostWarnThresholdMs > 0 && processingCostMs >= singleReqProcessingCostWarnThresholdMs) {
@@ -296,7 +299,7 @@ function listen(): void {
               if (typeof blockedUntil === "number") {
                 await scheduleProcessingCostUnblock(ip, blockedUntil, handleProcessingCostUnblock);
               }
-              log("WARN", withTiming({ msg: "IP PROCESSING COST BLOCKED", ip, port, socketId, subscriptionId, processingCostMs, totalProcessingCostMsForIP, processingCostBlockThresholdMs, req: reqPayload, ...(reqExecutionStats ? { reqShape: reqExecutionStats.shape, reqAnalysisSignature: reqExecutionStats.analysis.signature, reqCandidatePlans: reqExecutionStats.analysis.candidatePlans, reqFilters: reqExecutionStats.analysis.filters, reqMode: reqExecutionStats.mode, upstreamEventCount: reqExecutionStats.upstreamEventCount, downstreamEventCount: reqExecutionStats.downstreamEventCount } : {}), trackedReqsForSocket: subscriptionTracker.getTrackedReqsForSocket(), ...(typeof blockedUntil === "number" ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() } : {}) }));
+              log("WARN", withTiming({ msg: "IP PROCESSING COST BLOCKED", ip, port, socketId, subscriptionId, processingCostMs, chargedProcessingCostMs, totalProcessingCostMsForIP, processingCostBlockThresholdMs, req: reqPayload, ...(reqExecutionStats ? { reqShape: reqExecutionStats.shape, reqAnalysisSignature: reqExecutionStats.analysis.signature, reqCandidatePlans: reqExecutionStats.analysis.candidatePlans, reqFilters: reqExecutionStats.analysis.filters, reqMode: reqExecutionStats.mode, upstreamEventCount: reqExecutionStats.upstreamEventCount, downstreamEventCount: reqExecutionStats.downstreamEventCount } : {}), trackedReqsForSocket: subscriptionTracker.getTrackedReqsForSocket(), ...(typeof blockedUntil === "number" ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() } : {}) }));
               const blockedMessage = JSON.stringify(["NOTICE", "blocked: Blocked by accumulated processing cost"]);
               const sockets = await getSocketsForIP(ip);
               for (const socket of sockets) {
@@ -491,19 +494,22 @@ function listen(): void {
         const reqPlanExperimentCandidate = reqPlanRecommendation ? getReqPlanExperimentCandidate(reqPlanRecommendation) : undefined;
         const shouldDualRunReq = shouldStartDualRun(reqExecutionStats, reqPlanExperimentCandidate);
         if (shouldDualRunReq && rewritePlan.isMessageEdited) {
+          const shadowMode = reqPlanExperimentCandidate?.challengerMode === "split_authors" ? "split_authors" : "strip_p_e_tags";
           subscriptionTracker.trackReq(subscriptionId, reqPayload, "passthrough");
-          const shadowSubscriptionId = getDualRunShadowSubscriptionId(subscriptionId);
+          const shadowSubscriptionId = getDualRunShadowSubscriptionId(subscriptionId, shadowMode);
           const shadowEvent = [event[0], shadowSubscriptionId, ...rewritePlan.rewrittenEvent.slice(2)];
           shadowMessage = JSON.stringify(shadowEvent);
           dualRunShadowToPrimary.set(shadowSubscriptionId, subscriptionId);
           dualRunValidations.set(subscriptionId, {
+            shadowSubscriptionId,
+            shadowMode,
             authoritativeEventIds: new Set(),
             shadowEventIds: new Set(),
             authoritativeUpstreamEventCount: 0,
             shadowUpstreamEventCount: 0,
           });
-          subscriptionTracker.trackReq(shadowSubscriptionId, reqPayload, "strip_p_e_tags");
-          log("INFO", withTiming({ msg: "REQ DUAL RUN START", ip, port, socketId, connectionCountForIP, subscriptionId, shadowSubscriptionId, authoritativeMode: "passthrough", shadowMode: "strip_p_e_tags", originalReq: reqPayload, shadowReq: shadowEvent.slice(2), recommendationBasis: reqPlanRecommendation?.basis, experimentReason: reqPlanExperimentCandidate?.reason }));
+          subscriptionTracker.trackReq(shadowSubscriptionId, reqPayload, shadowMode);
+          log("INFO", withTiming({ msg: "REQ DUAL RUN START", ip, port, socketId, connectionCountForIP, subscriptionId, shadowSubscriptionId, authoritativeMode: "passthrough", shadowMode, originalReq: reqPayload, shadowReq: shadowEvent.slice(2), recommendationBasis: reqPlanRecommendation?.basis, experimentReason: reqPlanExperimentCandidate?.reason }));
         } else {
           event = rewritePlan.rewrittenEvent;
           isMessageEdited = isMessageEdited || rewritePlan.isMessageEdited;
@@ -556,8 +562,8 @@ function listen(): void {
         }
       } else if (event[0] === "CLOSE") {
         const subscriptionId = event[1];
-        const shadowSubscriptionId = getDualRunShadowSubscriptionId(subscriptionId);
-        if (dualRunShadowToPrimary.has(shadowSubscriptionId)) {
+        const shadowSubscriptionId = dualRunValidations.get(subscriptionId)?.shadowSubscriptionId;
+        if (shadowSubscriptionId && dualRunShadowToPrimary.has(shadowSubscriptionId)) {
           dualRunShadowToPrimary.delete(shadowSubscriptionId);
           dualRunValidations.delete(subscriptionId);
           subscriptionTracker.forgetSubscription(shadowSubscriptionId);
@@ -669,4 +675,12 @@ function listen(): void {
   server.listen(listenPort);
 }
 
-listen();
+async function start(): Promise<void> {
+  await refreshReqSplitAuthorsPolicy();
+  listen();
+}
+
+start().catch((error: Error) => {
+  log("ERROR", { msg: "STARTUP FAILED", error });
+  process.exit(1);
+});

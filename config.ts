@@ -45,6 +45,8 @@ export const cidrRanges = Object.keys(process.env)
   .map((key) => process.env[key]!);
 export const processingCostBlockThresholdMs = parseInt(process.env.PROCESSING_COST_BLOCK_THRESHOLD_MS ?? "0");
 export const processingCostBlockDurationSec = parseInt(process.env.PROCESSING_COST_BLOCK_DURATION_SEC ?? "600");
+export const processingCostAccumulationMinMs = parseInt(process.env.PROCESSING_COST_ACCUMULATION_MIN_MS ?? "1000");
+export const processingCostDecayWindowSec = parseInt(process.env.PROCESSING_COST_DECAY_WINDOW_SEC ?? "600");
 export const singleReqProcessingCostWarnThresholdMs = parseInt(process.env.SINGLE_REQ_PROCESSING_COST_WARN_THRESHOLD_MS ?? "10000");
 export const maxTrackedReqsPerSocket = parseInt(process.env.MAX_TRACKED_REQS_PER_SOCKET ?? "100");
 export const maxConcurrentReqsPerSocket = parseInt(process.env.MAX_CONCURRENT_REQS_PER_SOCKET ?? "8");
@@ -66,6 +68,14 @@ export const reqRewriteDisabledKinds =
         .map((kind) => parseInt(kind.trim(), 10))
         .filter((kind) => !Number.isNaN(kind))
     : [1];
+export const reqSplitAuthorsEnabledKinds =
+  typeof process.env.REQ_SPLIT_AUTHORS_ENABLED_KINDS !== "undefined" && process.env.REQ_SPLIT_AUTHORS_ENABLED_KINDS !== ""
+    ? process.env.REQ_SPLIT_AUTHORS_ENABLED_KINDS.split(",")
+        .map((kind) => parseInt(kind.trim(), 10))
+        .filter((kind) => !Number.isNaN(kind))
+    : [0, 3, 10002];
+export const reqSplitAuthorsMinCount = parseInt(process.env.REQ_SPLIT_AUTHORS_MIN_COUNT ?? "72");
+export const reqSplitAuthorsChunkSize = parseInt(process.env.REQ_SPLIT_AUTHORS_CHUNK_SIZE ?? "64");
 export const reqDualRunEnabledKinds =
   typeof process.env.REQ_DUAL_RUN_ENABLED_KINDS !== "undefined" && process.env.REQ_DUAL_RUN_ENABLED_KINDS !== ""
     ? process.env.REQ_DUAL_RUN_ENABLED_KINDS.split(",")
@@ -97,6 +107,8 @@ export function logStartupConfig(): void {
     blockedIPAddresses: cidrRanges,
     processingCostBlockThresholdMs,
     processingCostBlockDurationSec,
+    processingCostAccumulationMinMs,
+    processingCostDecayWindowSec,
     singleReqProcessingCostWarnThresholdMs,
     maxTrackedReqsPerSocket,
     maxConcurrentReqsPerSocket,
@@ -108,6 +120,9 @@ export function logStartupConfig(): void {
     reconnectBanDurationSec,
     reqRewriteEnabledKinds,
     reqRewriteDisabledKinds,
+    reqSplitAuthorsEnabledKinds,
+    reqSplitAuthorsMinCount,
+    reqSplitAuthorsChunkSize,
     reqDualRunEnabledKinds,
     reqDualRunSampleRate,
     reqPlanRewriteMinSampleCount,

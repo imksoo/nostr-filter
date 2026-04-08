@@ -28,6 +28,7 @@ export type ConnectionReleaseState = {
 
 export type ProcessingCostUpdate = {
   totalProcessingCostMsForIP: number;
+  chargedProcessingCostMs: number;
   isNewlyBlocked: boolean;
   blockedUntil?: number;
 };
@@ -78,7 +79,7 @@ export type ReqAnalysis = {
 export type ReqExecutionStats = {
   shape: ReqShape;
   analysis: ReqAnalysis;
-  mode: "passthrough" | "strip_p_e_tags";
+  mode: "passthrough" | "strip_p_e_tags" | "split_authors";
   upstreamEventCount: number;
   downstreamEventCount: number;
 };

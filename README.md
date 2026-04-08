@@ -97,8 +97,10 @@ MUTE_FILTER_2=/lnbc/
 Processing-cost settings:
 
 ```ini
-PROCESSING_COST_BLOCK_THRESHOLD_MS=60000
+PROCESSING_COST_BLOCK_THRESHOLD_MS=120000
 PROCESSING_COST_BLOCK_DURATION_SEC=600
+PROCESSING_COST_ACCUMULATION_MIN_MS=1000
+PROCESSING_COST_DECAY_WINDOW_SEC=600
 BLOCKED_ACTION_BAN_DURATION_SEC=600
 CONCURRENT_REQ_BAN_THRESHOLD=3
 CONCURRENT_REQ_BAN_DURATION_SEC=60
@@ -110,6 +112,9 @@ MAX_TRACKED_REQS_PER_SOCKET=100
 MAX_CONCURRENT_REQS_PER_SOCKET=16
 REQ_REWRITE_ENABLED_KINDS=1984
 REQ_REWRITE_DISABLED_KINDS=1
+REQ_SPLIT_AUTHORS_ENABLED_KINDS=0,3,10002
+REQ_SPLIT_AUTHORS_MIN_COUNT=72
+REQ_SPLIT_AUTHORS_CHUNK_SIZE=64
 REQ_DUAL_RUN_ENABLED_KINDS=
 REQ_DUAL_RUN_SAMPLE_RATE=0
 REQ_PLAN_REWRITE_MIN_SAMPLE_COUNT=20
@@ -159,6 +164,10 @@ REQ_PLANNER_STATS_FLUSH_INTERVAL_SEC=60
   Cumulative per-IP `REQ -> EOSE` cost threshold in milliseconds. `0` disables cumulative blocking.
 - `PROCESSING_COST_BLOCK_DURATION_SEC`
   How long an IP remains blocked after crossing the cumulative threshold.
+- `PROCESSING_COST_ACCUMULATION_MIN_MS`
+  Minimum per-request cost in milliseconds that is charged into the accumulated per-IP processing-cost total.
+- `PROCESSING_COST_DECAY_WINDOW_SEC`
+  Linear decay window in seconds for accumulated per-IP processing cost. Older cost gradually falls away instead of accumulating forever.
 - `BLOCKED_ACTION_BAN_DURATION_SEC`
   How long an IP remains blocked after it triggers a blocked `REQ` or blocked `EVENT` kind.
 - `CONCURRENT_REQ_BAN_THRESHOLD`
@@ -181,6 +190,12 @@ REQ_PLANNER_STATS_FLUSH_INTERVAL_SEC=60
   Comma-separated kinds eligible for local `REQ` rewrite. The current rewrite strips `#p` and `#e` from single-filter, single-kind requests before forwarding upstream, then applies those tag checks locally.
 - `REQ_REWRITE_DISABLED_KINDS`
   Comma-separated kinds that must never be rewritten. This is useful for keeping common cases such as `kind 1` in pass-through mode.
+- `REQ_SPLIT_AUTHORS_ENABLED_KINDS`
+  Comma-separated kinds eligible for authors splitting. When a single-filter, single-kind request without `limit` exceeds the configured author threshold, `nostr-filter` rewrites it into multiple filters on the same upstream `REQ`, each carrying one chunk of the original `authors` list.
+- `REQ_SPLIT_AUTHORS_MIN_COUNT`
+  Fallback minimum `authors` count required before authors splitting is considered. When upstream NIP-11 exposes `limitation.max_limit`, runtime uses `max_limit * 2 + 1` instead.
+- `REQ_SPLIT_AUTHORS_CHUNK_SIZE`
+  Fallback chunk size for authors splitting. When upstream NIP-11 exposes `limitation.max_limit`, runtime uses `max_limit` instead.
 - `REQ_DUAL_RUN_ENABLED_KINDS`
   Optional comma-separated kinds eligible for speculative dual-run validation. Leave empty to allow any rewrite-eligible kind. In dual-run mode the original `REQ` remains authoritative, while a rewritten shadow query runs only for comparison.
 - `REQ_DUAL_RUN_SAMPLE_RATE`

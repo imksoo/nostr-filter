@@ -1,4 +1,5 @@
-import { reqRewriteDisabledKinds, reqRewriteEnabledKinds } from "./config";
+import { reqRewriteDisabledKinds, reqRewriteEnabledKinds, reqSplitAuthorsEnabledKinds } from "./config";
+import { getReqSplitAuthorsPolicy } from "./req-split-authors-policy";
 import { ReqAnalysis, ReqExecutionStats, ReqFilterAnalysis, ReqShape } from "./types";
 
 type ReqFilter = Record<string, unknown>;
@@ -23,14 +24,24 @@ function getReqFilters(reqPayload: unknown): ReqFilter[] {
 }
 
 function getRewriteEligibleModes(reqFilter: ReqFilter): ReqExecutionStats["mode"][] {
+  const eligibleModes: ReqExecutionStats["mode"][] = [];
+  const splitPolicy = getReqSplitAuthorsPolicy();
   const kinds = toNumberArray(reqFilter.kinds);
-  if (kinds.length !== 1) return [];
+  if (kinds.length !== 1) return eligibleModes;
 
   const kind = kinds[0];
-  if (reqRewriteDisabledKinds.includes(kind)) return [];
-  if (toStringArray(reqFilter["#p"]).length === 0 && toStringArray(reqFilter["#e"]).length === 0) return [];
+  const authorsCount = toStringArray(reqFilter.authors).length;
+  const hasLimit = typeof reqFilter.limit === "number";
+  if (reqSplitAuthorsEnabledKinds.includes(kind) && !hasLimit && authorsCount >= splitPolicy.minCount && splitPolicy.chunkSize > 0 && authorsCount > splitPolicy.chunkSize) {
+    eligibleModes.push("split_authors");
+  }
 
-  return ["strip_p_e_tags"];
+  if (reqRewriteDisabledKinds.includes(kind)) return eligibleModes;
+  if (!reqRewriteEnabledKinds.includes(kind)) return eligibleModes;
+  if (toStringArray(reqFilter["#p"]).length === 0 && toStringArray(reqFilter["#e"]).length === 0) return eligibleModes;
+
+  eligibleModes.push("strip_p_e_tags");
+  return eligibleModes;
 }
 
 function analyzeReqFilter(reqFilter: ReqFilter, filterIndex: number): ReqFilterAnalysis {
@@ -107,11 +118,15 @@ export function analyzeReq(reqPayload: unknown): ReqAnalysis {
   const filters = getReqFilters(reqPayload);
   const analyses = filters.map((reqFilter, filterIndex) => analyzeReqFilter(reqFilter, filterIndex));
   const shape = buildReqShape(filters, analyses);
-  const rewriteTargetKinds = new Set(reqRewriteEnabledKinds);
+  const tagRewriteTargetKinds = new Set(reqRewriteEnabledKinds);
+  const authorSplitTargetKinds = new Set(reqSplitAuthorsEnabledKinds);
   const candidatePlans = Array.from(new Set(["passthrough", ...analyses.flatMap((analysis) => analysis.rewriteEligibleModes)])) as ReqExecutionStats["mode"][];
-  const activeRewriteModes = analyses.some((analysis) => analysis.kinds.some((kind) => rewriteTargetKinds.has(kind)))
-    ? candidatePlans.filter((mode) => mode !== "passthrough")
-    : [];
+  const activeRewriteModes = candidatePlans.filter((mode) => {
+    if (mode === "passthrough") return false;
+    if (mode === "strip_p_e_tags") return analyses.some((analysis) => analysis.kinds.some((kind) => tagRewriteTargetKinds.has(kind)));
+    if (mode === "split_authors") return analyses.some((analysis) => analysis.kinds.some((kind) => authorSplitTargetKinds.has(kind)));
+    return false;
+  });
 
   return {
     shape,

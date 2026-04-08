@@ -1,4 +1,5 @@
-import { reqRewriteDisabledKinds, reqRewriteEnabledKinds } from "./config";
+import { reqRewriteDisabledKinds, reqRewriteEnabledKinds, reqSplitAuthorsEnabledKinds } from "./config";
+import { getReqSplitAuthorsPolicy } from "./req-split-authors-policy";
 import { ReqExecutionStats } from "./types";
 
 type ReqRewriteMode = ReqExecutionStats["mode"];
@@ -49,6 +50,30 @@ function rewriteReqFilter(reqFilter: ReqFilter): ReqFilter {
   return rewrittenFilter;
 }
 
+function shouldSplitAuthorsReqFilter(reqFilter: ReqFilter): boolean {
+  const splitPolicy = getReqSplitAuthorsPolicy();
+  const kinds = toNumberArray(reqFilter.kinds);
+  if (kinds.length !== 1) return false;
+  if (splitPolicy.chunkSize <= 0) return false;
+  if (typeof reqFilter.limit === "number") return false;
+
+  const kind = kinds[0];
+  const authors = toStringArray(reqFilter.authors);
+  if (!reqSplitAuthorsEnabledKinds.includes(kind)) return false;
+  if (authors.length < splitPolicy.minCount) return false;
+  return authors.length > splitPolicy.chunkSize;
+}
+
+function splitAuthorsReqFilter(reqFilter: ReqFilter): ReqFilter[] {
+  const splitPolicy = getReqSplitAuthorsPolicy();
+  const authors = toStringArray(reqFilter.authors);
+  const rewrittenFilters: ReqFilter[] = [];
+  for (let index = 0; index < authors.length; index += splitPolicy.chunkSize) {
+    rewrittenFilters.push({ ...reqFilter, authors: authors.slice(index, index + splitPolicy.chunkSize) });
+  }
+  return rewrittenFilters;
+}
+
 function getReqFilters(reqPayload: unknown): ReqFilter[] {
   if (Array.isArray(reqPayload)) return reqPayload.filter(isReqFilter);
   return isReqFilter(reqPayload) ? [reqPayload] : [];
@@ -81,14 +106,23 @@ function eventMatchesReqFilter(reqFilter: ReqFilter, event: Record<string, unkno
 export function planReqRewrite(event: any[]): ReqRewritePlan {
   if (event[0] !== "REQ" || event.length < 3) return { mode: "passthrough", rewrittenEvent: event, isMessageEdited: false };
 
-  let isMessageEdited = false;
+  let didSplitAuthors = false;
+  const authorSplitFilters = event.slice(2).flatMap((reqFilter) => {
+    if (!isReqFilter(reqFilter) || !shouldSplitAuthorsReqFilter(reqFilter)) return [reqFilter];
+    didSplitAuthors = true;
+    return splitAuthorsReqFilter(reqFilter);
+  });
+
+  if (didSplitAuthors) return { mode: "split_authors", rewrittenEvent: [event[0], event[1], ...authorSplitFilters], isMessageEdited: true };
+
+  let didStripTags = false;
   const rewrittenFilters = event.slice(2).map((reqFilter) => {
     if (!isReqFilter(reqFilter) || !shouldRewriteReqFilter(reqFilter)) return reqFilter;
-    isMessageEdited = true;
+    didStripTags = true;
     return rewriteReqFilter(reqFilter);
   });
 
-  if (!isMessageEdited) return { mode: "passthrough", rewrittenEvent: event, isMessageEdited: false };
+  if (!didStripTags) return { mode: "passthrough", rewrittenEvent: event, isMessageEdited: false };
 
   return { mode: "strip_p_e_tags", rewrittenEvent: [event[0], event[1], ...rewrittenFilters], isMessageEdited: true };
 }
