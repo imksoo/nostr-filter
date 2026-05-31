@@ -35,6 +35,12 @@ export const blockedWriteKinds =
         .map((kind) => parseInt(kind.trim(), 10))
         .filter((kind) => !Number.isNaN(kind))
     : blockedReqKinds;
+export const blockedWriteTags =
+  typeof process.env.BLOCKED_WRITE_TAGS !== "undefined" && process.env.BLOCKED_WRITE_TAGS !== ""
+    ? process.env.BLOCKED_WRITE_TAGS.split(",")
+        .map((tag) => tag.trim())
+        .filter((tag) => tag !== "")
+    : [];
 export const blockEphemeralWrites = process.env.BLOCK_EPHEMERAL_WRITES === "true";
 
 export const filterProxyEvents = process.env.FILTER_PROXY_EVENTS === "true";
@@ -102,6 +108,7 @@ export function logStartupConfig(): void {
     contentFilters: contentFilters.map((regex) => `/${regex.source}/${regex.flags}`),
     blockedReqKinds,
     blockedWriteKinds,
+    blockedWriteTags,
     blockEphemeralWrites,
     whitelistedIpAddresses: whitelistedIpCidrs,
     blockedIPAddresses: cidrRanges,

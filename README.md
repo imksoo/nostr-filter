@@ -152,6 +152,8 @@ REQ_PLANNER_STATS_FLUSH_INTERVAL_SEC=60
   When `true`, downstream `EVENT` writes with `20000 <= kind < 30000` are ignored before forwarding upstream. This does not trigger an IP ban by itself.
 - `BLOCKED_WRITE_KINDS`
   Comma-separated event kinds for downstream `EVENT` write blocking.
+- `BLOCKED_WRITE_TAGS`
+  Comma-separated event tag names for downstream `EVENT` write blocking.
 - `WHITELISTED_PUBKEYS`
   Comma-separated hex pubkeys that bypass some filtering checks where applicable.
 - `WHITELISTED_IP_ADDR_*`
@@ -334,6 +336,8 @@ This is useful when a client never crosses the cumulative block threshold but st
 If `BLOCK_EPHEMERAL_WRITES` is `true`, `nostr-filter` ignores downstream `EVENT` writes whose `kind` is in the ephemeral range `20000 <= kind < 30000`. These are logged as `EVENT BLOCKED`, but they do not trigger an IP ban by themselves.
 
 If `BLOCKED_WRITE_KINDS` is set, `nostr-filter` rejects any downstream `EVENT` write whose `kind` matches one of those values.
+
+If `BLOCKED_WRITE_TAGS` is set, `nostr-filter` rejects any downstream `EVENT` write whose `tags` include one of those tag names.
 
 If `BLOCKED_REQ_KINDS` is set, `nostr-filter` can also reject any `REQ` whose `kinds` array contains one of those values.
 
