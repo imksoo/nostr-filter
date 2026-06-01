@@ -15,6 +15,7 @@ const ruleBlockedUntilByIP = new Map<string, number>();
 const ruleBlockReasonsByIP = new Map<string, string>();
 const ruleBlockTimeoutsByIP = new Map<string, NodeJS.Timeout>();
 const concurrentReqViolationCountsByIP = new Map<string, number>();
+const concurrentReqViolationSocketIdsByIP = new Map<string, Set<string>>();
 const concurrentReqViolationTimeoutsByIP = new Map<string, NodeJS.Timeout>();
 const reconnectAttemptCountsByIP = new Map<string, number>();
 const reconnectAttemptTimeoutsByIP = new Map<string, NodeJS.Timeout>();
@@ -161,7 +162,7 @@ export async function releaseConnection(ip: string, socket: WebSocket): Promise<
   return releaseState;
 }
 
-export async function addProcessingCostForIP(ip: string, processingCostMs: number): Promise<ProcessingCostUpdate> {
+export async function addProcessingCostForIP(ip: string, processingCostMs: number, blockThresholdMs = processingCostBlockThresholdMs, blockDurationSec = processingCostBlockDurationSec): Promise<ProcessingCostUpdate> {
   const update: ProcessingCostUpdate = { totalProcessingCostMsForIP: 0, chargedProcessingCostMs: 0, isNewlyBlocked: false };
 
   await connectionCountMutex.runExclusive(async () => {
@@ -176,9 +177,9 @@ export async function addProcessingCostForIP(ip: string, processingCostMs: numbe
       totalProcessingCostMsByIP.delete(ip);
       processingCostUpdatedAtByIP.delete(ip);
     }
-    if (processingCostBlockThresholdMs > 0 && update.totalProcessingCostMsForIP >= processingCostBlockThresholdMs && !blockedIPsByProcessingCost.has(ip)) {
+    if (blockThresholdMs > 0 && update.totalProcessingCostMsForIP >= blockThresholdMs && !blockedIPsByProcessingCost.has(ip)) {
       blockedIPsByProcessingCost.add(ip);
-      update.blockedUntil = now + processingCostBlockDurationSec * 1000;
+      update.blockedUntil = now + blockDurationSec * 1000;
       processingCostBlockedUntilByIP.set(ip, update.blockedUntil);
       update.isNewlyBlocked = true;
     }
@@ -200,6 +201,7 @@ export async function blockIPByRule(ip: string, reason: string, durationSec: num
 
   await connectionCountMutex.runExclusive(async () => {
     concurrentReqViolationCountsByIP.delete(ip);
+    concurrentReqViolationSocketIdsByIP.delete(ip);
     const concurrentReqTimeout = concurrentReqViolationTimeoutsByIP.get(ip);
     if (concurrentReqTimeout) {
       clearTimeout(concurrentReqTimeout);
@@ -225,25 +227,31 @@ export async function blockIPByRule(ip: string, reason: string, durationSec: num
   return update;
 }
 
-export async function recordConcurrentReqViolation(ip: string): Promise<number> {
+export async function recordConcurrentReqViolation(ip: string, socketId: string): Promise<{ violationCount: number; violationSocketCount: number }> {
   let violationCount = 0;
+  let violationSocketCount = 0;
 
   await connectionCountMutex.runExclusive(async () => {
     violationCount = (concurrentReqViolationCountsByIP.get(ip) ?? 0) + 1;
     concurrentReqViolationCountsByIP.set(ip, violationCount);
+    const violationSocketIds = concurrentReqViolationSocketIdsByIP.get(ip) ?? new Set<string>();
+    violationSocketIds.add(socketId);
+    concurrentReqViolationSocketIdsByIP.set(ip, violationSocketIds);
+    violationSocketCount = violationSocketIds.size;
 
     const currentTimeout = concurrentReqViolationTimeoutsByIP.get(ip);
     if (currentTimeout) clearTimeout(currentTimeout);
     const timeoutId = setTimeout(() => {
       void connectionCountMutex.runExclusive(async () => {
         concurrentReqViolationCountsByIP.delete(ip);
+        concurrentReqViolationSocketIdsByIP.delete(ip);
         concurrentReqViolationTimeoutsByIP.delete(ip);
       });
     }, concurrentReqBanDurationSec * 1000);
     concurrentReqViolationTimeoutsByIP.set(ip, timeoutId);
   });
 
-  return violationCount;
+  return { violationCount, violationSocketCount };
 }
 
 export async function recordReconnectAttempt(ip: string): Promise<number> {

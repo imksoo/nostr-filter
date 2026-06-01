@@ -98,18 +98,30 @@ Processing-cost settings:
 
 ```ini
 PROCESSING_COST_BLOCK_THRESHOLD_MS=120000
+TRUSTED_ASN_PREFIXES_PATH=./data/trusted-asn-prefixes.json
+MAX_CONNECTIONS_PER_IP=100
+TRUSTED_MAX_CONNECTIONS_PER_IP=1000
+TRUSTED_PROCESSING_COST_BLOCK_THRESHOLD_MS=1200000
 PROCESSING_COST_BLOCK_DURATION_SEC=600
+TRUSTED_PROCESSING_COST_BLOCK_DURATION_SEC=30
 PROCESSING_COST_ACCUMULATION_MIN_MS=1000
 PROCESSING_COST_DECAY_WINDOW_SEC=600
 BLOCKED_ACTION_BAN_DURATION_SEC=600
 CONCURRENT_REQ_BAN_THRESHOLD=3
+CONCURRENT_REQ_BAN_MIN_SOCKET_COUNT=1
 CONCURRENT_REQ_BAN_DURATION_SEC=60
+TRUSTED_CONCURRENT_REQ_BAN_THRESHOLD=1000
+TRUSTED_CONCURRENT_REQ_BAN_MIN_SOCKET_COUNT=100
+TRUSTED_CONCURRENT_REQ_BAN_DURATION_SEC=10
 RECONNECT_BAN_THRESHOLD=20
 RECONNECT_BAN_WINDOW_SEC=60
 RECONNECT_BAN_DURATION_SEC=300
+TRUSTED_RECONNECT_BAN_THRESHOLD=1000
+TRUSTED_RECONNECT_BAN_DURATION_SEC=30
 SINGLE_REQ_PROCESSING_COST_WARN_THRESHOLD_MS=10000
 MAX_TRACKED_REQS_PER_SOCKET=100
 MAX_CONCURRENT_REQS_PER_SOCKET=16
+TRUSTED_MAX_CONCURRENT_REQS_PER_SOCKET=24
 REQ_REWRITE_ENABLED_KINDS=1984
 REQ_REWRITE_DISABLED_KINDS=1
 REQ_SPLIT_AUTHORS_ENABLED_KINDS=0,3,10002
@@ -164,8 +176,18 @@ REQ_PLANNER_STATS_FLUSH_INTERVAL_SEC=60
   Regex patterns applied to event content.
 - `PROCESSING_COST_BLOCK_THRESHOLD_MS`
   Cumulative per-IP `REQ -> EOSE` cost threshold in milliseconds. `0` disables cumulative blocking.
+- `TRUSTED_ASN_PREFIXES_PATH`
+  JSON file containing trusted ASN IPv4 prefixes. Matching clients keep per-socket limits but use the trusted IP-level thresholds.
+- `MAX_CONNECTIONS_PER_IP`
+  Maximum active websocket connections from one non-whitelisted, non-trusted IP.
+- `TRUSTED_MAX_CONNECTIONS_PER_IP`
+  Maximum active websocket connections from one trusted ASN IP.
+- `TRUSTED_PROCESSING_COST_BLOCK_THRESHOLD_MS`
+  Processing-cost block threshold for trusted ASN IPs.
 - `PROCESSING_COST_BLOCK_DURATION_SEC`
   How long an IP remains blocked after crossing the cumulative threshold.
+- `TRUSTED_PROCESSING_COST_BLOCK_DURATION_SEC`
+  Processing-cost block duration for trusted ASN IPs.
 - `PROCESSING_COST_ACCUMULATION_MIN_MS`
   Minimum per-request cost in milliseconds that is charged into the accumulated per-IP processing-cost total.
 - `PROCESSING_COST_DECAY_WINDOW_SEC`
@@ -174,20 +196,34 @@ REQ_PLANNER_STATS_FLUSH_INTERVAL_SEC=60
   How long an IP remains blocked after it triggers a blocked `REQ` or blocked `EVENT` kind.
 - `CONCURRENT_REQ_BAN_THRESHOLD`
   Number of `Blocked by too many concurrent REQs` violations from one IP before it is temporarily blocked.
+- `CONCURRENT_REQ_BAN_MIN_SOCKET_COUNT`
+  Number of distinct sockets from one IP that must hit the concurrent-`REQ` limit before the IP can be temporarily blocked.
 - `CONCURRENT_REQ_BAN_DURATION_SEC`
   How long an IP remains blocked after repeatedly hitting the concurrent-`REQ` limit.
+- `TRUSTED_CONCURRENT_REQ_BAN_THRESHOLD`
+  Concurrent-`REQ` violation threshold for trusted ASN IPs.
+- `TRUSTED_CONCURRENT_REQ_BAN_MIN_SOCKET_COUNT`
+  Distinct violating socket count required before a trusted ASN IP can be temporarily blocked.
+- `TRUSTED_CONCURRENT_REQ_BAN_DURATION_SEC`
+  Concurrent-`REQ` IP block duration for trusted ASN IPs.
 - `RECONNECT_BAN_THRESHOLD`
   Number of accepted websocket connections from one IP inside the reconnect window before `nostr-filter` temporarily blocks that IP.
 - `RECONNECT_BAN_WINDOW_SEC`
   Sliding time window, in seconds, used for reconnect-rate tracking.
 - `RECONNECT_BAN_DURATION_SEC`
   How long an IP remains blocked after repeatedly reconnecting inside the reconnect window.
+- `TRUSTED_RECONNECT_BAN_THRESHOLD`
+  Reconnect threshold for trusted ASN IPs. Uses the same `RECONNECT_BAN_WINDOW_SEC`.
+- `TRUSTED_RECONNECT_BAN_DURATION_SEC`
+  Reconnect block duration for trusted ASN IPs.
 - `SINGLE_REQ_PROCESSING_COST_WARN_THRESHOLD_MS`
   Per-request warning threshold in milliseconds. `0` disables heavy single-request warnings.
 - `MAX_TRACKED_REQS_PER_SOCKET`
   Maximum number of tracked request payloads kept in memory for one socket.
 - `MAX_CONCURRENT_REQS_PER_SOCKET`
   Maximum number of active subscriptions allowed on one client WebSocket. A new `REQ` above this limit is rejected by `nostr-filter` before it reaches `strfry`.
+- `TRUSTED_MAX_CONCURRENT_REQS_PER_SOCKET`
+  Per-socket active subscription cap for trusted ASN IPs.
 - `REQ_REWRITE_ENABLED_KINDS`
   Comma-separated kinds eligible for local `REQ` rewrite. The current rewrite strips `#p` and `#e` from single-filter, single-kind requests before forwarding upstream, then applies those tag checks locally.
 - `REQ_REWRITE_DISABLED_KINDS`
@@ -323,7 +359,7 @@ This is useful when a client never crosses the cumulative block threshold but st
 - Existing subscription IDs may be replaced by another `REQ` with the same ID.
 - New subscription IDs above `MAX_CONCURRENT_REQS_PER_SOCKET` are rejected immediately.
 - The filter emits `REQ BLOCKED` and closes the socket with a policy error before `strfry` can emit `too many concurrent REQs`.
-- If the same IP hits this limit `CONCURRENT_REQ_BAN_THRESHOLD` times, the IP is temporarily blocked for `CONCURRENT_REQ_BAN_DURATION_SEC` and the filter emits `IP RULE BLOCKED`.
+- If the same IP hits this limit `CONCURRENT_REQ_BAN_THRESHOLD` times across at least `CONCURRENT_REQ_BAN_MIN_SOCKET_COUNT` distinct sockets, the IP is temporarily blocked for `CONCURRENT_REQ_BAN_DURATION_SEC` and the filter emits `IP RULE BLOCKED`.
 
 ### Reconnect-rate blocking
 

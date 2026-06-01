@@ -5,7 +5,7 @@ import url from "url";
 import * as mime from "mime-types";
 import { v7 as uuidv7 } from "uuid";
 import WebSocket from "ws";
-import { blockedActionBanDurationSec, cidrRanges, concurrentReqBanDurationSec, concurrentReqBanThreshold, enableForwardReqHeaders, listenPort, logStartupConfig, maxConcurrentReqsPerSocket, maxTrackedReqsPerSocket, maxWebsocketPayloadSize, processingCostBlockDurationSec, processingCostBlockThresholdMs, reconnectBanDurationSec, reconnectBanThreshold, reconnectBanWindowSec, reqDualRunEnabledKinds, reqDualRunSampleRate, reqPlannerStatsFlushIntervalSec, reqPlannerStatsPath, singleReqProcessingCostWarnThresholdMs, upstreamHttpUrl, upstreamWsForFastBotUrl, upstreamWsUrl, whitelistedIpCidrs } from "./config";
+import { blockedActionBanDurationSec, cidrRanges, concurrentReqBanDurationSec, concurrentReqBanMinSocketCount, concurrentReqBanThreshold, enableForwardReqHeaders, listenPort, logStartupConfig, maxConcurrentReqsPerSocket, maxConnectionsPerIP, maxTrackedReqsPerSocket, maxWebsocketPayloadSize, processingCostBlockDurationSec, processingCostBlockThresholdMs, reconnectBanDurationSec, reconnectBanThreshold, reconnectBanWindowSec, reqDualRunEnabledKinds, reqDualRunSampleRate, reqPlannerStatsFlushIntervalSec, reqPlannerStatsPath, singleReqProcessingCostWarnThresholdMs, trustedAsnPrefixesPath, trustedConcurrentReqBanDurationSec, trustedConcurrentReqBanMinSocketCount, trustedConcurrentReqBanThreshold, trustedMaxConcurrentReqsPerSocket, trustedMaxConnectionsPerIP, trustedProcessingCostBlockDurationSec, trustedProcessingCostBlockThresholdMs, trustedReconnectBanDurationSec, trustedReconnectBanThreshold, upstreamHttpUrl, upstreamWsForFastBotUrl, upstreamWsUrl, whitelistedIpCidrs } from "./config";
 import { evaluateDownstreamEvent, evaluateUpstreamEvent, ipMatchesCidr } from "./filters";
 import { log } from "./logger";
 import { buildForwardHeaders, clearIdleTimeout, getClientAddress, getRequestedSubprotocols, resetIdleTimeout, setIdleTimeout } from "./network";
@@ -18,6 +18,7 @@ import { createSubscriptionTracker, SubscriptionTracker } from "./subscriptions"
 let upstreamWriteSocket = new WebSocket(upstreamWsForFastBotUrl);
 const blockedConnectLogUntilByIP = new Map<string, number>();
 const subscriptionTrackersByIP = new Map<string, Map<string, SubscriptionTracker>>();
+let trustedAsnCidrs: string[] = [];
 
 function registerSubscriptionTracker(ip: string, subscriptionTracker: SubscriptionTracker): void {
   const trackersForIP = subscriptionTrackersByIP.get(ip) ?? new Map<string, SubscriptionTracker>();
@@ -44,7 +45,25 @@ function isWhitelistedIP(ip: string): boolean {
   return whitelistedIpCidrs.some((cidr) => ipMatchesCidr(ip, cidr));
 }
 
+function loadTrustedAsnCidrs(): void {
+  try {
+    const filePath = path.resolve(__dirname, trustedAsnPrefixesPath);
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw) as { prefixes?: unknown };
+    trustedAsnCidrs = Array.isArray(parsed.prefixes) ? parsed.prefixes.filter((prefix): prefix is string => typeof prefix === "string" && !prefix.includes(":")) : [];
+    log("INFO", { msg: "TRUSTED ASN PREFIXES LOADED", filePath, prefixCount: trustedAsnCidrs.length });
+  } catch (error) {
+    trustedAsnCidrs = [];
+    log("WARN", { msg: "TRUSTED ASN PREFIXES NOT LOADED", trustedAsnPrefixesPath, error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+function isTrustedAsnIP(ip: string): boolean {
+  return trustedAsnCidrs.some((cidr) => ipMatchesCidr(ip, cidr));
+}
+
 logStartupConfig();
+loadTrustedAsnCidrs();
 loadReqPlannerStats(path.resolve(__dirname, reqPlannerStatsPath));
 setInterval(() => persistReqPlannerStats(path.resolve(__dirname, reqPlannerStatsPath)), reqPlannerStatsFlushIntervalSec * 1000);
 
@@ -123,6 +142,16 @@ function listen(): void {
     const clientAddress = getClientAddress(req);
     const { ip, port } = clientAddress;
     const isWhitelistedClientIP = isWhitelistedIP(ip);
+    const isTrustedAsnClientIP = !isWhitelistedClientIP && isTrustedAsnIP(ip);
+    const effectiveMaxConnectionsPerIP = isTrustedAsnClientIP ? trustedMaxConnectionsPerIP : maxConnectionsPerIP;
+    const effectiveMaxConcurrentReqsPerSocket = isTrustedAsnClientIP ? trustedMaxConcurrentReqsPerSocket : maxConcurrentReqsPerSocket;
+    const effectiveReconnectBanThreshold = isTrustedAsnClientIP ? trustedReconnectBanThreshold : reconnectBanThreshold;
+    const effectiveReconnectBanDurationSec = isTrustedAsnClientIP ? trustedReconnectBanDurationSec : reconnectBanDurationSec;
+    const effectiveProcessingCostBlockThresholdMs = isTrustedAsnClientIP ? trustedProcessingCostBlockThresholdMs : processingCostBlockThresholdMs;
+    const effectiveProcessingCostBlockDurationSec = isTrustedAsnClientIP ? trustedProcessingCostBlockDurationSec : processingCostBlockDurationSec;
+    const effectiveConcurrentReqBanThreshold = isTrustedAsnClientIP ? trustedConcurrentReqBanThreshold : concurrentReqBanThreshold;
+    const effectiveConcurrentReqBanMinSocketCount = isTrustedAsnClientIP ? trustedConcurrentReqBanMinSocketCount : concurrentReqBanMinSocketCount;
+    const effectiveConcurrentReqBanDurationSec = isTrustedAsnClientIP ? trustedConcurrentReqBanDurationSec : concurrentReqBanDurationSec;
     registerSubscriptionTracker(ip, subscriptionTracker);
     const requestedSubprotocols = getRequestedSubprotocols(req);
     const wsClientOptions = enableForwardReqHeaders ? { headers: buildForwardHeaders(req, clientAddress) } : undefined;
@@ -283,7 +312,7 @@ function listen(): void {
             const reqPayload = subscriptionTracker.getReqPayload(subscriptionId);
             const reqExecutionStats = subscriptionTracker.getReqExecutionStats(subscriptionId);
             subscriptionTracker.deleteReqTracking(subscriptionId);
-            const { totalProcessingCostMsForIP, chargedProcessingCostMs, isNewlyBlocked, blockedUntil } = await addProcessingCostForIP(ip, processingCostMs);
+            const { totalProcessingCostMsForIP, chargedProcessingCostMs, isNewlyBlocked, blockedUntil } = await addProcessingCostForIP(ip, processingCostMs, effectiveProcessingCostBlockThresholdMs, effectiveProcessingCostBlockDurationSec);
             if (reqExecutionStats) recordReqExecutionStats(reqExecutionStats, processingCostMs);
             const validation = dualRunValidations.get(subscriptionId);
             if (validation) validation.authoritativeProcessingCostMs = processingCostMs;
@@ -299,7 +328,7 @@ function listen(): void {
               if (typeof blockedUntil === "number") {
                 await scheduleProcessingCostUnblock(ip, blockedUntil, handleProcessingCostUnblock);
               }
-              log("WARN", withTiming({ msg: "IP PROCESSING COST BLOCKED", ip, port, socketId, subscriptionId, processingCostMs, chargedProcessingCostMs, totalProcessingCostMsForIP, processingCostBlockThresholdMs, req: reqPayload, ...(reqExecutionStats ? { reqShape: reqExecutionStats.shape, reqAnalysisSignature: reqExecutionStats.analysis.signature, reqCandidatePlans: reqExecutionStats.analysis.candidatePlans, reqFilters: reqExecutionStats.analysis.filters, reqMode: reqExecutionStats.mode, upstreamEventCount: reqExecutionStats.upstreamEventCount, downstreamEventCount: reqExecutionStats.downstreamEventCount } : {}), trackedReqsForSocket: subscriptionTracker.getTrackedReqsForSocket(), ...(typeof blockedUntil === "number" ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() } : {}) }));
+              log("WARN", withTiming({ msg: "IP PROCESSING COST BLOCKED", ip, port, socketId, subscriptionId, processingCostMs, chargedProcessingCostMs, totalProcessingCostMsForIP, processingCostBlockThresholdMs: effectiveProcessingCostBlockThresholdMs, isTrustedAsnClientIP, req: reqPayload, ...(reqExecutionStats ? { reqShape: reqExecutionStats.shape, reqAnalysisSignature: reqExecutionStats.analysis.signature, reqCandidatePlans: reqExecutionStats.analysis.candidatePlans, reqFilters: reqExecutionStats.analysis.filters, reqMode: reqExecutionStats.mode, upstreamEventCount: reqExecutionStats.upstreamEventCount, downstreamEventCount: reqExecutionStats.downstreamEventCount } : {}), trackedReqsForSocket: subscriptionTracker.getTrackedReqsForSocket(), ...(typeof blockedUntil === "number" ? { processingCostBlockedUntil: new Date(blockedUntil).toISOString() } : {}) }));
               const blockedMessage = JSON.stringify(["NOTICE", "blocked: Blocked by accumulated processing cost"]);
               const sockets = await getSocketsForIP(ip);
               for (const socket of sockets) {
@@ -368,7 +397,8 @@ function listen(): void {
         {
           connectionCountForIP: connectionAttempt.connectionCountForIP,
           totalProcessingCostMsForIP: connectionAttempt.totalProcessingCostMsForIP,
-          processingCostBlockThresholdMs,
+          processingCostBlockThresholdMs: effectiveProcessingCostBlockThresholdMs,
+          isTrustedAsnClientIP,
           processingCostBlockedUntil: connectionAttempt.processingCostBlockedUntil,
         },
         connectionAttempt.processingCostBlockedUntil,
@@ -390,21 +420,23 @@ function listen(): void {
       return;
     }
 
-    if (!isWhitelistedClientIP && connectionAttempt.connectionCountForIP > 100) {
+    if (!isWhitelistedClientIP && connectionAttempt.connectionCountForIP > effectiveMaxConnectionsPerIP) {
       sendBlockedNoticeAndClose("Blocked by too many connections", 1008, "Too many requests.", {
         connectionCountForIP: connectionAttempt.connectionCountForIP,
+        maxConnectionsPerIP: effectiveMaxConnectionsPerIP,
+        isTrustedAsnClientIP,
       });
       return;
     }
 
     const connectionCountForIP = await acceptConnection(ip, downstreamSocket);
     const reconnectAttemptCount = await recordReconnectAttempt(ip);
-    if (!isWhitelistedClientIP && reconnectBanThreshold > 0 && reconnectAttemptCount >= reconnectBanThreshold) {
-      const because = `Blocked by repeated reconnects (${reconnectAttemptCount}/${reconnectBanThreshold} in ${reconnectBanWindowSec}s)`;
-      const { blockedUntil, isNewlyBlocked } = await blockIPByRule(ip, because, reconnectBanDurationSec);
+    if (!isWhitelistedClientIP && effectiveReconnectBanThreshold > 0 && reconnectAttemptCount >= effectiveReconnectBanThreshold) {
+      const because = `Blocked by repeated reconnects (${reconnectAttemptCount}/${effectiveReconnectBanThreshold} in ${reconnectBanWindowSec}s)`;
+      const { blockedUntil, isNewlyBlocked } = await blockIPByRule(ip, because, effectiveReconnectBanDurationSec);
       await scheduleRuleUnblock(ip, blockedUntil, handleRuleUnblock);
       if (isNewlyBlocked) {
-        log("WARN", withTiming({ msg: "IP RULE BLOCKED", because, ip, port, socketId, reconnectAttemptCount, reconnectBanThreshold, reconnectBanWindowSec, reconnectBanDurationSec, ruleBlockedUntil: new Date(blockedUntil).toISOString() }));
+        log("WARN", withTiming({ msg: "IP RULE BLOCKED", because, ip, port, socketId, reconnectAttemptCount, reconnectBanThreshold: effectiveReconnectBanThreshold, reconnectBanWindowSec, reconnectBanDurationSec: effectiveReconnectBanDurationSec, isTrustedAsnClientIP, ruleBlockedUntil: new Date(blockedUntil).toISOString() }));
         const blockedMessage = JSON.stringify(["NOTICE", `blocked: ${because}`]);
         const sockets = await getSocketsForIP(ip);
         for (const socket of sockets) {
@@ -413,10 +445,10 @@ function listen(): void {
           socket.close(1008, "Forbidden");
         }
       }
-      sendBlockedNoticeAndClose(because, 1008, "Forbidden", { connectionCountForIP, reconnectAttemptCount, reconnectBanThreshold, reconnectBanWindowSec, reconnectBanDurationSec }, blockedUntil);
+      sendBlockedNoticeAndClose(because, 1008, "Forbidden", { connectionCountForIP, reconnectAttemptCount, reconnectBanThreshold: effectiveReconnectBanThreshold, reconnectBanWindowSec, reconnectBanDurationSec: effectiveReconnectBanDurationSec, isTrustedAsnClientIP }, blockedUntil);
       return;
     }
-    log("INFO", withTiming({ msg: "CONNECTED", ip, port, socketId, connectionCountForIP, headers: req.headers }));
+    log("INFO", withTiming({ msg: "CONNECTED", ip, port, socketId, connectionCountForIP, isTrustedAsnClientIP, headers: req.headers }));
 
     async function handleDownstreamMessage(data: WebSocket.RawData): Promise<void> {
       if (isSocketTerminating) return;
@@ -469,18 +501,18 @@ function listen(): void {
         const reqFilter = event[2];
         const isNewSubscription = !subscriptionTracker.hasActiveSubscription(subscriptionId);
         const activeSubscriptionCount = subscriptionTracker.getActiveSubscriptionCount();
-        if (!isWhitelistedClientIP && isNewSubscription && activeSubscriptionCount >= maxConcurrentReqsPerSocket) {
+        if (!isWhitelistedClientIP && isNewSubscription && activeSubscriptionCount >= effectiveMaxConcurrentReqsPerSocket) {
           if (!beginSocketTermination()) return;
           shouldRelay = false;
           because = "Blocked by too many concurrent REQs";
-          const concurrentReqViolationCount = await recordConcurrentReqViolation(ip);
+          const { violationCount: concurrentReqViolationCount, violationSocketCount: concurrentReqViolationSocketCount } = await recordConcurrentReqViolation(ip, socketId);
           const blockedMessage = JSON.stringify(["NOTICE", `blocked: ${because}`]);
-          log("WARN", withTiming({ msg: "REQ BLOCKED", because, ip, port, socketId, connectionCountForIP, subscriptionId, activeSubscriptionCount, maxConcurrentReqsPerSocket, concurrentReqViolationCount, concurrentReqBanThreshold, req: reqFilter, blockedMessage }));
-          if (concurrentReqViolationCount >= concurrentReqBanThreshold) {
-            const ruleBlockReason = `Blocked by repeated too many concurrent REQs (${concurrentReqViolationCount}/${concurrentReqBanThreshold})`;
-            const { blockedUntil, isNewlyBlocked } = await blockIPByRule(ip, ruleBlockReason, concurrentReqBanDurationSec);
+          log("WARN", withTiming({ msg: "REQ BLOCKED", because, ip, port, socketId, connectionCountForIP, subscriptionId, activeSubscriptionCount, maxConcurrentReqsPerSocket: effectiveMaxConcurrentReqsPerSocket, concurrentReqViolationCount, concurrentReqBanThreshold: effectiveConcurrentReqBanThreshold, concurrentReqViolationSocketCount, concurrentReqBanMinSocketCount: effectiveConcurrentReqBanMinSocketCount, isTrustedAsnClientIP, req: reqFilter, blockedMessage }));
+          if (concurrentReqViolationCount >= effectiveConcurrentReqBanThreshold && concurrentReqViolationSocketCount >= effectiveConcurrentReqBanMinSocketCount) {
+            const ruleBlockReason = `Blocked by repeated too many concurrent REQs (${concurrentReqViolationCount}/${effectiveConcurrentReqBanThreshold}, sockets ${concurrentReqViolationSocketCount}/${effectiveConcurrentReqBanMinSocketCount})`;
+            const { blockedUntil, isNewlyBlocked } = await blockIPByRule(ip, ruleBlockReason, effectiveConcurrentReqBanDurationSec);
             await scheduleRuleUnblock(ip, blockedUntil, handleRuleUnblock);
-            if (isNewlyBlocked) log("WARN", withTiming({ msg: "IP RULE BLOCKED", because: ruleBlockReason, ip, port, socketId, concurrentReqViolationCount, concurrentReqBanThreshold, concurrentReqBanDurationSec, ruleBlockedUntil: new Date(blockedUntil).toISOString(), subscriptionId, activeSubscriptionCount, maxConcurrentReqsPerSocket, req: reqFilter }));
+            if (isNewlyBlocked) log("WARN", withTiming({ msg: "IP RULE BLOCKED", because: ruleBlockReason, ip, port, socketId, concurrentReqViolationCount, concurrentReqBanThreshold: effectiveConcurrentReqBanThreshold, concurrentReqViolationSocketCount, concurrentReqBanMinSocketCount: effectiveConcurrentReqBanMinSocketCount, concurrentReqBanDurationSec: effectiveConcurrentReqBanDurationSec, isTrustedAsnClientIP, ruleBlockedUntil: new Date(blockedUntil).toISOString(), subscriptionId, activeSubscriptionCount, maxConcurrentReqsPerSocket: effectiveMaxConcurrentReqsPerSocket, req: reqFilter }));
           }
           downstreamSocket.send(blockedMessage);
           downstreamSocket.close(1008, "Too many concurrent REQs");

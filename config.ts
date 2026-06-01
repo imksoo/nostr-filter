@@ -46,22 +46,34 @@ export const blockEphemeralWrites = process.env.BLOCK_EPHEMERAL_WRITES === "true
 export const filterProxyEvents = process.env.FILTER_PROXY_EVENTS === "true";
 export const enableForwardReqHeaders = process.env.ENABLE_FORWARD_REQ_HEADERS === "true";
 export const maxWebsocketPayloadSize = parseInt(process.env.MAX_WEBSOCKET_PAYLOAD_SIZE ?? "1000000");
+export const maxConnectionsPerIP = parseInt(process.env.MAX_CONNECTIONS_PER_IP ?? "100");
+export const trustedAsnPrefixesPath = process.env.TRUSTED_ASN_PREFIXES_PATH ?? "./data/trusted-asn-prefixes.json";
+export const trustedMaxConnectionsPerIP = parseInt(process.env.TRUSTED_MAX_CONNECTIONS_PER_IP ?? "1000");
 export const cidrRanges = Object.keys(process.env)
   .filter((key) => key.startsWith("BLOCKED_IP_ADDR_"))
   .map((key) => process.env[key]!);
 export const processingCostBlockThresholdMs = parseInt(process.env.PROCESSING_COST_BLOCK_THRESHOLD_MS ?? "0");
+export const trustedProcessingCostBlockThresholdMs = parseInt(process.env.TRUSTED_PROCESSING_COST_BLOCK_THRESHOLD_MS ?? "1200000");
 export const processingCostBlockDurationSec = parseInt(process.env.PROCESSING_COST_BLOCK_DURATION_SEC ?? "600");
+export const trustedProcessingCostBlockDurationSec = parseInt(process.env.TRUSTED_PROCESSING_COST_BLOCK_DURATION_SEC ?? "30");
 export const processingCostAccumulationMinMs = parseInt(process.env.PROCESSING_COST_ACCUMULATION_MIN_MS ?? "1000");
 export const processingCostDecayWindowSec = parseInt(process.env.PROCESSING_COST_DECAY_WINDOW_SEC ?? "600");
 export const singleReqProcessingCostWarnThresholdMs = parseInt(process.env.SINGLE_REQ_PROCESSING_COST_WARN_THRESHOLD_MS ?? "10000");
 export const maxTrackedReqsPerSocket = parseInt(process.env.MAX_TRACKED_REQS_PER_SOCKET ?? "100");
 export const maxConcurrentReqsPerSocket = parseInt(process.env.MAX_CONCURRENT_REQS_PER_SOCKET ?? "8");
+export const trustedMaxConcurrentReqsPerSocket = parseInt(process.env.TRUSTED_MAX_CONCURRENT_REQS_PER_SOCKET ?? "24");
 export const blockedActionBanDurationSec = parseInt(process.env.BLOCKED_ACTION_BAN_DURATION_SEC ?? "600");
 export const concurrentReqBanThreshold = parseInt(process.env.CONCURRENT_REQ_BAN_THRESHOLD ?? "3");
+export const concurrentReqBanMinSocketCount = parseInt(process.env.CONCURRENT_REQ_BAN_MIN_SOCKET_COUNT ?? "1");
 export const concurrentReqBanDurationSec = parseInt(process.env.CONCURRENT_REQ_BAN_DURATION_SEC ?? "60");
+export const trustedConcurrentReqBanThreshold = parseInt(process.env.TRUSTED_CONCURRENT_REQ_BAN_THRESHOLD ?? "1000");
+export const trustedConcurrentReqBanMinSocketCount = parseInt(process.env.TRUSTED_CONCURRENT_REQ_BAN_MIN_SOCKET_COUNT ?? "100");
+export const trustedConcurrentReqBanDurationSec = parseInt(process.env.TRUSTED_CONCURRENT_REQ_BAN_DURATION_SEC ?? "10");
 export const reconnectBanThreshold = parseInt(process.env.RECONNECT_BAN_THRESHOLD ?? "20");
 export const reconnectBanWindowSec = parseInt(process.env.RECONNECT_BAN_WINDOW_SEC ?? "60");
 export const reconnectBanDurationSec = parseInt(process.env.RECONNECT_BAN_DURATION_SEC ?? "300");
+export const trustedReconnectBanThreshold = parseInt(process.env.TRUSTED_RECONNECT_BAN_THRESHOLD ?? "1000");
+export const trustedReconnectBanDurationSec = parseInt(process.env.TRUSTED_RECONNECT_BAN_DURATION_SEC ?? "30");
 export const reqRewriteEnabledKinds =
   typeof process.env.REQ_REWRITE_ENABLED_KINDS !== "undefined" && process.env.REQ_REWRITE_ENABLED_KINDS !== ""
     ? process.env.REQ_REWRITE_ENABLED_KINDS.split(",")
@@ -112,19 +124,31 @@ export function logStartupConfig(): void {
     blockEphemeralWrites,
     whitelistedIpAddresses: whitelistedIpCidrs,
     blockedIPAddresses: cidrRanges,
+    maxConnectionsPerIP,
+    trustedAsnPrefixesPath,
+    trustedMaxConnectionsPerIP,
     processingCostBlockThresholdMs,
+    trustedProcessingCostBlockThresholdMs,
     processingCostBlockDurationSec,
+    trustedProcessingCostBlockDurationSec,
     processingCostAccumulationMinMs,
     processingCostDecayWindowSec,
     singleReqProcessingCostWarnThresholdMs,
     maxTrackedReqsPerSocket,
     maxConcurrentReqsPerSocket,
+    trustedMaxConcurrentReqsPerSocket,
     blockedActionBanDurationSec,
     concurrentReqBanThreshold,
+    concurrentReqBanMinSocketCount,
     concurrentReqBanDurationSec,
+    trustedConcurrentReqBanThreshold,
+    trustedConcurrentReqBanMinSocketCount,
+    trustedConcurrentReqBanDurationSec,
     reconnectBanThreshold,
     reconnectBanWindowSec,
     reconnectBanDurationSec,
+    trustedReconnectBanThreshold,
+    trustedReconnectBanDurationSec,
     reqRewriteEnabledKinds,
     reqRewriteDisabledKinds,
     reqSplitAuthorsEnabledKinds,
