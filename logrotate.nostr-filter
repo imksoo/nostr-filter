@@ -1,9 +1,0 @@
-/home/strfry/nostr-filter/logs/nostr-filter.log {
-    size 256M
-    rotate 8
-    compress
-    delaycompress
-    missingok
-    notifempty
-    copytruncate
-}
