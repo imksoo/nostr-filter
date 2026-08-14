@@ -108,6 +108,7 @@ export const reqPlanRewriteMaxAvgDownstreamEventCount = Number.parseFloat(proces
 export const reqPlanRewriteMinTotalTagValueCount = parseInt(process.env.REQ_PLAN_REWRITE_MIN_TOTAL_TAG_VALUE_COUNT ?? "2");
 export const reqPlannerStatsPath = process.env.REQ_PLANNER_STATS_PATH ?? "./data/req-planner-stats.json";
 export const reqPlannerStatsFlushIntervalSec = parseInt(process.env.REQ_PLANNER_STATS_FLUSH_INTERVAL_SEC ?? "60");
+export const reqPlannerStatsMaxEntries = parseInt(process.env.REQ_PLANNER_STATS_MAX_ENTRIES ?? "50000");
 
 export function logStartupConfig(): void {
   log("INFO", { msg: "process.env", ...process.env });
@@ -163,5 +164,6 @@ export function logStartupConfig(): void {
     reqPlanRewriteMinTotalTagValueCount,
     reqPlannerStatsPath,
     reqPlannerStatsFlushIntervalSec,
+    reqPlannerStatsMaxEntries,
   });
 }

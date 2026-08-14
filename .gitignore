@@ -1,6 +1,7 @@
 node_modules/
 static/
 data/
+logs/
 
 *.js
 .env

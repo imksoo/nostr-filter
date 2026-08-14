@@ -1,13 +1,17 @@
 services:
   filter:
     build: .
+    user: "${NOSTR_FILTER_UID:-1001}:${NOSTR_FILTER_GID:-1001}"
     ports:
       - "8081:8081"
     volumes:
       - "./data/:/app/data/"
+      - "./logs/:/app/logs/"
       - "./static/:/app/static/"
     env_file:
       - ./.env
+    environment:
+      LOG_FILE_PATH: /app/logs/nostr-filter.log
     sysctls:
       net.ipv4.ip_local_port_range: "1024 65535"
       net.ipv4.tcp_tw_reuse: 1

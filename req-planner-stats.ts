@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import {
+  reqPlannerStatsMaxEntries,
   reqPlanRewriteMaxAvgDownstreamEventCount,
   reqPlanRewriteMaxAvgResultDensityPerAuthorTagUnit,
   reqPlanRewriteMinAvgProcessingCostMs,
@@ -313,7 +314,10 @@ export function recordReqExecutionStats(stats: ReqExecutionStats, processingCost
 type ReqShapeAggregateSnapshot = ReqShapeAggregate & { key: string };
 
 function getSnapshot(): ReqShapeAggregateSnapshot[] {
-  return [...reqShapeAggregates.values(), ...reqSignatureAggregates.values()].map((aggregate) => ({ ...aggregate, key: aggregate.key }));
+  return [...reqShapeAggregates.values(), ...reqSignatureAggregates.values()]
+    .sort((left, right) => right.sampleCount - left.sampleCount || right.maxProcessingCostMs - left.maxProcessingCostMs)
+    .slice(0, reqPlannerStatsMaxEntries)
+    .map((aggregate) => ({ ...aggregate, key: aggregate.key }));
 }
 
 export function loadReqPlannerStats(filePath: string): void {

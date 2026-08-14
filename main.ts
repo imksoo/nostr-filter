@@ -15,10 +15,28 @@ import { planReqRewrite, shouldRelayRewrittenEvent } from "./req-rewrite";
 import { refreshReqSplitAuthorsPolicy } from "./req-split-authors-policy";
 import { createSubscriptionTracker, SubscriptionTracker } from "./subscriptions";
 
-let upstreamWriteSocket = new WebSocket(upstreamWsForFastBotUrl);
+let upstreamWriteSocket: WebSocket;
 const blockedConnectLogUntilByIP = new Map<string, number>();
 const subscriptionTrackersByIP = new Map<string, Map<string, SubscriptionTracker>>();
 let trustedAsnCidrs: string[] = [];
+
+function connectUpstreamWriteSocket(): void {
+  upstreamWriteSocket = new WebSocket(upstreamWsForFastBotUrl, { maxPayload: maxWebsocketPayloadSize });
+
+  upstreamWriteSocket.on("open", () => {
+    log("INFO", { msg: "UPSTREAM WRITE SOCKET CONNECTED", upstreamWsForFastBotUrl });
+  });
+
+  upstreamWriteSocket.on("error", (error: Error) => {
+    log("WARN", { msg: "UPSTREAM WRITE SOCKET ERROR", upstreamWsForFastBotUrl, error });
+    upstreamWriteSocket.terminate();
+  });
+
+  upstreamWriteSocket.on("close", () => {
+    log("WARN", { msg: "UPSTREAM WRITE SOCKET CLOSED", upstreamWsForFastBotUrl });
+    setTimeout(connectUpstreamWriteSocket, 1000);
+  });
+}
 
 function registerSubscriptionTracker(ip: string, subscriptionTracker: SubscriptionTracker): void {
   const trackersForIP = subscriptionTrackersByIP.get(ip) ?? new Map<string, SubscriptionTracker>();
@@ -66,6 +84,7 @@ logStartupConfig();
 loadTrustedAsnCidrs();
 loadReqPlannerStats(path.resolve(__dirname, reqPlannerStatsPath));
 setInterval(() => persistReqPlannerStats(path.resolve(__dirname, reqPlannerStatsPath)), reqPlannerStatsFlushIntervalSec * 1000);
+connectUpstreamWriteSocket();
 
 async function handleProcessingCostUnblock(ip: string): Promise<void> {
   const { totalProcessingCostMsForIP, hadBlockedState } = await unblockIPByProcessingCost(ip);
@@ -186,6 +205,31 @@ function listen(): void {
         upstreamSocket.close();
       }
     }
+
+    async function handleDownstreamSocketError(error: Error): Promise<void> {
+      const isOversizedPayload = error.message === "Max payload size exceeded";
+      log("WARN", withTiming({ msg: "DOWNSTREAM ERROR", ip, port, socketId, error, ...(isOversizedPayload ? { action: "block_oversized_payload" } : {}) }));
+
+      if (!isWhitelistedClientIP && isOversizedPayload) {
+        const because = "Blocked by oversized websocket payload";
+        const { blockedUntil, isNewlyBlocked } = await blockIPByRule(ip, because, blockedActionBanDurationSec);
+        await scheduleRuleUnblock(ip, blockedUntil, handleRuleUnblock);
+        if (isNewlyBlocked) {
+          log("WARN", withTiming({ msg: "IP RULE BLOCKED", because, ip, port, socketId, blockedActionBanDurationSec, ruleBlockedUntil: new Date(blockedUntil).toISOString() }));
+        }
+      }
+
+      downstreamSocket.close(1009, "Message too big");
+      closeUpstreamSocket();
+    }
+
+    downstreamSocket.on("error", (error: Error) => {
+      void handleDownstreamSocketError(error).catch((handlerError: Error) => {
+        log("WARN", withTiming({ msg: "DOWNSTREAM ERROR HANDLER FAILED", ip, port, socketId, error, handlerError }));
+        downstreamSocket.terminate();
+        closeUpstreamSocket();
+      });
+    });
 
     function sendBlockedNoticeAndClose(because: string, closeCode: number, closeReason: string, extraPayload: Record<string, unknown> = {}, logUntil?: number): void {
       if (!beginSocketTermination()) return;
@@ -620,7 +664,9 @@ function listen(): void {
           let msg = message;
           if (isMessageEdited) msg = JSON.stringify(event);
 
-          if (event[0] === "EVENT") upstreamWriteSocket.send(msg);
+          if (event[0] === "EVENT" && upstreamWriteSocket.readyState === WebSocket.OPEN) {
+            upstreamWriteSocket.send(msg);
+          }
 
           if (upstreamSocket.readyState === WebSocket.OPEN) {
             upstreamSocket.send(msg);
@@ -697,11 +743,6 @@ function listen(): void {
       clearIdleTimeout(downstreamSocket);
     });
 
-    downstreamSocket.on("error", async (error: Error) => {
-      log("WARN", withTiming({ msg: "DOWNSTREAM ERROR", ip, port, socketId, connectionCountForIP, error }));
-      downstreamSocket.close();
-      upstreamSocket.close();
-    });
   });
 
   server.listen(listenPort);
